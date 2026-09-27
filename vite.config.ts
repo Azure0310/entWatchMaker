@@ -11,7 +11,7 @@ export default defineConfig({
     sourcemap: false,
   },
   worker: {
-    format: 'es',
+    format: 'iife',
   },
   test: {
     include: ['tests/**/*.test.ts'],

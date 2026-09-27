@@ -34,7 +34,11 @@ English summary is at the bottom.
 
 ## 使い方
 
-1. https://（GitHub Pages を有効にした URL）を開くか、ローカルで `npm install && npm run dev` して開きます。
+1. 次のいずれかでツールを開きます。
+   - **単一 HTML 版（インストール不要）**: [`release/entwatchmaker.html`](release/entwatchmaker.html) をダウンロードして
+     Chrome / Edge で開くだけで動きます（Worker も埋め込み済みなので `file://` でそのまま動作します）。
+   - GitHub Pages を有効にした URL を開く（下記「GitHub Pages で公開する」）。
+   - ローカルで `npm install --legacy-peer-deps && npm run dev` して開く。
 2. `.vmap` または `.vpk` をドロップします（初めてなら「サンプルマップを読み込む」で UI を試せます）。
 3. 左の `weapon_` を選び、中央のツリーで配線を確認しながら「アイテムとして追加」。
 4. 右側でハンドラの `event` / `mode` / `cooldown` などを調整します。
@@ -73,7 +77,8 @@ npm install --legacy-peer-deps
 npm run dev        # 開発サーバー
 npm test           # パーサ / モデルのユニットテスト (vitest)
 npm run typecheck
-npm run build      # dist/ に静的サイトを出力
+npm run build         # dist/ に静的サイトを出力
+npm run build:single  # release/entwatchmaker.html（全部入りの 1 ファイル）を生成
 ```
 
 ### 構成
@@ -119,7 +124,9 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
 
 - Formats: VPK (single or split), Source 2 resources, binary KV3 v0–v5 (LZ4/Zstd), `*.vents_c` entity lumps
   including `point_template` child lumps, DMX binary 9 `.vmap` with prefab lineage hammer ids.
+- No install needed: download [`release/entwatchmaker.html`](release/entwatchmaker.html) and open it in Chrome / Edge
+  (the parser worker is inlined, so it runs from `file://`).
 - Workflow: drop files → pick a weapon → "Add as item" (handlers are suggested from parenting and outputs) →
   adjust event / mode / cooldown → download the jsonc. Existing configs can be imported and edited.
-- Dev: `npm install --legacy-peer-deps`, `npm run dev`, `npm test`, `npm run build`. Deploy with the included
+- Dev: `npm install --legacy-peer-deps`, `npm run dev`, `npm test`, `npm run build`, `npm run build:single`. Deploy with the included
   GitHub Pages workflow (Settings → Pages → Source: GitHub Actions).

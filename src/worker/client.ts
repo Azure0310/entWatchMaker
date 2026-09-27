@@ -1,5 +1,8 @@
 import type { ParsedMap } from '../model/entity';
 import type { ParseRequest, ParseResponse } from './parse.worker';
+// The worker is inlined as a Blob URL so the built page also works when opened from a local
+// file (file://), where a separate worker script could not be fetched.
+import ParseWorker from './parse.worker.ts?worker&inline';
 
 export function parseMapFiles(
   files: File[],
@@ -7,7 +10,7 @@ export function parseMapFiles(
   mainVmap?: string,
 ): Promise<ParsedMap> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./parse.worker.ts', import.meta.url), { type: 'module' });
+    const worker: Worker = new ParseWorker();
     worker.onmessage = (ev: MessageEvent<ParseResponse>) => {
       const msg = ev.data;
       if (msg.type === 'progress') onProgress(msg.message, msg.done, msg.total);
