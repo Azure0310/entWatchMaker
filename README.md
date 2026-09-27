@@ -74,6 +74,34 @@ English summary is at the bottom.
 - `mode`: `1` なし / `2` Cooldown / `3` MaxUses / `4` CooldownAfterUses / `5` CounterValue。
 - `hammerid` は必ず文字列です（CS2Fixes が文字列として読み込みます）。
 
+## 推定ロジックと、GFL 設定 211 件から見た傾向
+
+`Add as item` / `+` / `✨` で作られる雛形は、[gflze/CS2-ZE-Configs](https://github.com/gflze/CS2-ZE-Configs/tree/main/entwatch)
+の EntWatch 設定 211 ファイル（1774 アイテム、2656 ハンドラ）の傾向に合わせています。
+
+| 傾向 | 件数 | ツールでの扱い |
+| --- | --- | --- |
+| `button`（フックのみ、event なし）+ `OnPass` のフィルタ | 559 アイテム | 武器に親付けされたボタンは `{"type":"button","hammerid":..}` のみ、メッセージと cooldown は後段のフィルタ / リレー側に付ける |
+| `button` + `OnPressed` 単独 | 333 | 後段が無ければボタン自身に event `OnPressed`, mode 2 |
+| `button` + `OnTrigger` のリレー | 223 | リレーは `OnTrigger` |
+| `button` + `counterdown` / `counterup` | 102 | `math_counter` は counter タイプ（`OnHitMin` があれば down、`OnHitMax` なら up） |
+| `OnEqualTo` (logic_compare), `OnUser1/4`, `OnTrue` (logic_branch), `OnCaseNN` | 54 / 46 / 15 / 5 | イベント推定の事前確率に反映 |
+| イベント系ハンドラは `type` を書かない | 1074 | 出力も同じ（CS2Fixes は未指定 = Other） |
+| mode 2 の cooldown | 60 秒が最頻、次いで 50 / 65 / 75 / 70 / 90 / 80 | 秒数はマップの配線から推定（下記） |
+| mode 3 の maxuses | 1 が大半（152 / 252） | mode 3 で maxuses 0 は警告 |
+| `triggers` | 462 アイテム（ほぼ 1 件） | 武器に親付け / 武器を Kill する trigger_ を候補に |
+
+**イベント推定**: エンティティが実際に発火している出力それぞれについて、その先の配線を 3 段まで追い、
+「遅延付きの `Unlock` / `Enable` に到達する（= クールダウン付きの能力本体）」出力を最優先、次に効果の数、
+最後に classname ごとの事前確率（filter → `OnPass`、button → `OnPressed`、relay → `OnTrigger` …）で順位付けします。
+自身を `Kill` / `Lock` するだけの出力は下位になります。ハンドラ編集欄の event 候補はこの順で並び、推定と違う値のときは根拠付きで提案が出ます。
+
+**クールダウン推定**: `Lock` → 遅延付き `Unlock`、`Disable` → 遅延付き `Enable`、ボタンの `wait` から秒数を読みます。
+ハンドラ自身、その手前のボタン / physbox / game_ui、その先のフィルタ / リレー、親付けされた trigger を見ます。
+
+**I/O 検索**: 中央上のタブでマップ内の全接続を検索できます（例: `in:unlock`、`out:onpressed`、`from:materia`、`class:filter`、遅延ありのみ）。
+行の「+」で、その送信元エンティティをその出力を event にしたハンドラとして追加できます。
+
 ## マップ更新で hammerid が変わったとき
 
 CS2Fixes の EntWatch はエンティティを **hammerid でのみ** 照合します（targetname / classname は設定に書けません）。
@@ -152,6 +180,10 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   `steamapps\workshop\content\730` and lists the maps in it; nothing is uploaded.
 - Workflow: drop files → pick a weapon → "Add as item" (handlers are suggested from parenting and outputs) →
   adjust event / mode / cooldown → download the jsonc. Existing configs can be imported and edited.
+- Suggestions follow the conventions of the 211 GFL CS2 ZE configs (plain `button` hook + `OnPass`/`OnTrigger` handler,
+  `type` omitted for event handlers, counters for `math_counter`); the event is the output whose chain reaches a delayed
+  `Unlock`/`Enable`, the cooldown is that delay. An I/O search tab (`in:unlock`, `out:onpressed`, `class:filter`, …)
+  lists every connection in the map and can add a handler from any row.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.

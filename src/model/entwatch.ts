@@ -167,7 +167,9 @@ export function serializeEntWatchConfig(config: EntWatchConfig, opts: SerializeO
         out.push(`${i3}{`);
         const rows: { text: string; comment?: string }[] = [];
         if (h.name) rows.push({ text: `"name": ${q(h.name)}` });
-        rows.push({ text: `"type": ${q(h.type)}` });
+        // event handlers are written without "type" like the GFL configs (CS2Fixes treats any
+        // unknown/missing type as "other")
+        if (h.type !== 'other') rows.push({ text: `"type": ${q(h.type)}` });
         rows.push({ text: `"hammerid": ${q(h.hammerid)}`, comment: describe(h.hammerid) });
         if (h.type === 'button' || h.type === 'other') {
           if (h.event) rows.push({ text: `"event": ${q(h.event)}` });

@@ -128,6 +128,27 @@ export class EntityGraph {
     return this.relations.get(e.id) ?? [];
   }
 
+  /** Entities a specific connection of `from` resolves to. */
+  connectionTargets(from: MapEntity, c: EntityConnection): MapEntity[] {
+    return this.relationsOf(from)
+      .filter((r) => r.kind === 'output' && r.connection === c)
+      .map((r) => r.other);
+  }
+
+  private connectionIndex: { from: MapEntity; connection: EntityConnection; targets: MapEntity[] }[] | null = null;
+
+  /** Every connection in the map with its resolved targets (built once, on demand). */
+  allConnections(): { from: MapEntity; connection: EntityConnection; targets: MapEntity[] }[] {
+    if (!this.connectionIndex) {
+      const list: { from: MapEntity; connection: EntityConnection; targets: MapEntity[] }[] = [];
+      for (const e of this.entities) {
+        for (const c of e.connections) list.push({ from: e, connection: c, targets: this.connectionTargets(e, c) });
+      }
+      this.connectionIndex = list;
+    }
+    return this.connectionIndex;
+  }
+
   /** Connections from other entities that target `e`. */
   incomingConnections(e: MapEntity): { from: MapEntity; connection: EntityConnection }[] {
     return this.relationsOf(e)

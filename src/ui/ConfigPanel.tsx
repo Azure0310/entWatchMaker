@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { ENTWATCH_COLORS, HANDLER_MODES, type HandlerConfig, type HandlerType, type ItemConfig } from '../model/entwatch';
 import { friendlyName } from '../model/entity';
 import { outputChoices, suggestHandler } from '../model/suggest';
+import { suggestEvents } from '../model/events';
 import type { ValidationIssue } from '../model/validate';
 import {
   addEmptyItem,
@@ -58,7 +59,8 @@ function HandlerEditor({ item, h, issues }: { item: ItemConfig; h: HandlerConfig
   const t = useT();
   const { graph } = useAppState();
   const ent = graph?.byHammerId.get(h.hammerid)?.[0];
-  const choices = ent ? outputChoices(ent) : [];
+  const choices = ent ? outputChoices(ent, graph ?? undefined) : [];
+  const topGuess = ent && graph ? suggestEvents(graph, ent)[0] : undefined;
   const isCounter = h.type === 'counterup' || h.type === 'counterdown';
   const listId = `ev-${h.uid}`;
   const set = (patch: Partial<HandlerConfig>) => updateHandler(item.uid, h.uid, patch);
@@ -111,6 +113,14 @@ function HandlerEditor({ item, h, issues }: { item: ItemConfig; h: HandlerConfig
                 <option key={c} value={c} />
               ))}
             </datalist>
+            {topGuess && topGuess.event !== h.event && (
+              <span className="muted small">
+                {t('cfg.h.eventGuess', { event: topGuess.event })} ({topGuess.reason}){' '}
+                <button type="button" className="mini" onClick={() => set({ event: topGuess.event })}>
+                  ↵
+                </button>
+              </span>
+            )}
           </label>
         )}
         <label>

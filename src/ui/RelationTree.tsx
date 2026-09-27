@@ -4,6 +4,7 @@ import { friendlyName } from '../model/entity';
 import { addHandler, addTrigger, selectEntity, setTreeDepth, setTreeRoot } from './actions';
 import { useAppState } from './store';
 import { useT } from './useT';
+import { IoSearch } from './IoSearch';
 
 const KIND_ICON: Record<RelationKind, string> = {
   output: '→',
@@ -74,6 +75,7 @@ function Node({ node, usedIds, selectedId, itemUid }: { node: TreeNode; usedIds:
 export function RelationTree() {
   const t = useT();
   const { graph, treeRootId, treeDepth, selectedEntityId, config, selectedItemUid } = useAppState();
+  const [tab, setTab] = useState<'tree' | 'io'>('tree');
   const root = graph && treeRootId !== null ? graph.byId.get(treeRootId) ?? null : null;
   const tree = useMemo(() => (graph && root ? buildRelationTree(graph, root, treeDepth) : null), [graph, root, treeDepth]);
   const usedIds = useMemo(() => {
@@ -89,23 +91,36 @@ export function RelationTree() {
   return (
     <div className="panel tree-panel">
       <div className="panel-head row">
-        <strong>{t('tree.title')}</strong>
-        <label className="inline">
-          {t('tree.depth')}
-          <select value={treeDepth} onChange={(e) => setTreeDepth(parseInt(e.target.value, 10))} data-testid="tree-depth">
-            {[1, 2, 3, 4, 5].map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="muted small legend">{t('tree.legend')}</span>
+        <div className="tabs">
+          <button type="button" className={tab === 'tree' ? 'on' : ''} onClick={() => setTab('tree')} data-testid="tab-tree">
+            {t('tree.title')}
+          </button>
+          <button type="button" className={tab === 'io' ? 'on' : ''} onClick={() => setTab('io')} data-testid="tab-io">
+            {t('io.title')}
+          </button>
+        </div>
+        {tab === 'tree' && (
+          <label className="inline">
+            {t('tree.depth')}
+            <select value={treeDepth} onChange={(e) => setTreeDepth(parseInt(e.target.value, 10))} data-testid="tree-depth">
+              {[1, 2, 3, 4, 5].map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {tab === 'tree' && <span className="muted small legend">{t('tree.legend')}</span>}
       </div>
-      <div className="panel-body tree-body">
-        {!tree && <div className="muted pad">{t('tree.empty')}</div>}
-        {tree && <Node node={tree} usedIds={usedIds} selectedId={selectedEntityId} itemUid={selectedItemUid} />}
-      </div>
+      {tab === 'tree' ? (
+        <div className="panel-body tree-body">
+          {!tree && <div className="muted pad">{t('tree.empty')}</div>}
+          {tree && <Node node={tree} usedIds={usedIds} selectedId={selectedEntityId} itemUid={selectedItemUid} />}
+        </div>
+      ) : (
+        <IoSearch />
+      )}
     </div>
   );
 }
