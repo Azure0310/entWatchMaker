@@ -1,7 +1,8 @@
 name: Deploy to GitHub Pages
 
-# Publishes the built site whenever the default branch changes.
-# Enable it once in the repository settings: Settings -> Pages -> Source: "GitHub Actions".
+# Publishes the built site whenever the default branch changes (or on manual dispatch from any
+# branch). The configure-pages step turns Pages on with the "GitHub Actions" source if it is not
+# enabled yet, so no manual setting is needed on a public repository.
 on:
   push:
     branches: [main, master]
@@ -21,6 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
