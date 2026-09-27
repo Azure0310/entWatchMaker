@@ -74,6 +74,23 @@ English summary is at the bottom.
 - `mode`: `1` なし / `2` Cooldown / `3` MaxUses / `4` CooldownAfterUses / `5` CounterValue。
 - `hammerid` は必ず文字列です（CS2Fixes が文字列として読み込みます）。
 
+## マップ更新で hammerid が変わったとき
+
+CS2Fixes の EntWatch はエンティティを **hammerid でのみ** 照合します（targetname / classname は設定に書けません）。
+hammerid は同じ vmap を再コンパイルする限り変わりませんが、マッパーがエンティティを作り直したりプレハブに入れ替えたりすると変わります。
+
+そのためこのツールは、設定内の各 hammerid が「どの classname / targetname のエンティティだったか」を覚えておき、
+新しいバージョンのマップを読み込んだときに **名前で再照合** して hammerid を書き換えます。
+
+1. 新しい vpk / vmap を読み込む（同じマップ名なら前回の設定が自動で復元されます。別名なら旧 jsonc を「既存の jsonc を読み込む」で取り込みます）
+2. 一致しない hammerid があると右下に件数が出るので「名前で再照合」を押す
+3. 自動で決まらなかったものは候補が並ぶのでクリックして選ぶ
+4. 内容を確認してダウンロード
+
+照合に使う情報は、(a) 設定を作ったときに読み込んでいたマップ、(b) このツールが出力する jsonc のコメント
+（`"hammerid": "1202", // func_button fire_button`）の 2 つから集めます。コメントを消さずに保存しておくと、
+ツールだけで旧設定を新マップへ移行できます。
+
 ## 開発
 
 ```bash
@@ -135,5 +152,8 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   `steamapps\workshop\content\730` and lists the maps in it; nothing is uploaded.
 - Workflow: drop files → pick a weapon → "Add as item" (handlers are suggested from parenting and outputs) →
   adjust event / mode / cooldown → download the jsonc. Existing configs can be imported and edited.
+- Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
+  each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
+  newer map version no longer contains those ids.
 - Dev: `npm install --legacy-peer-deps`, `npm run dev`, `npm test`, `npm run build`, `npm run build:single`. Deploy with the included
   GitHub Pages workflow (Settings → Pages → Source: GitHub Actions).

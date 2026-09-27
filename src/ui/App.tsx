@@ -12,8 +12,8 @@ import { useT } from './useT';
 
 export function App() {
   const t = useT();
-  const { map, graph, config, lang, toast } = useAppState();
-  const issues = useMemo(() => validateConfig(config, graph), [config, graph]);
+  const { map, graph, config, lang, toast, hints } = useAppState();
+  const issues = useMemo(() => validateConfig(config, graph, hints), [config, graph, hints]);
 
   return (
     <div className="app">
