@@ -114,27 +114,63 @@ export class VpkArchive {
     return this.byPath.get(path.replace(/\\/g, '/').toLowerCase());
   }
 
+  /** Where an entry's bulk data lives: the source and the absolute offset inside it. */
+  private locate(entry: VpkEntry): { source: ByteSource; base: number } {
+    if (entry.archiveIndex === DIR_ARCHIVE_INDEX) {
+      return { source: this.dir, base: this.headerSize + this.treeSize + entry.offset };
+    }
+    const archive = this.archives.get(entry.archiveIndex);
+    if (!archive) {
+      throw new Error(
+        `VPK: entry "${entry.path}" lives in archive _${String(entry.archiveIndex).padStart(3, '0')}.vpk, which was not provided`,
+      );
+    }
+    return { source: archive, base: entry.offset };
+  }
+
+  /**
+   * Exposes an entry as a random access source without copying it. CS2 workshop packages nest
+   * the compiled map (`maps/<name>.vpk`) inside the addon vpk, and those can be hundreds of MB.
+   */
+  entrySource(entry: VpkEntry): ByteSource {
+    if (entry.preload.length > 0 || entry.length === 0) {
+      // rare for big files: fall back to materialising the entry
+      const pak = this;
+      let cached: Promise<Uint8Array> | null = null;
+      return {
+        size: entry.preload.length + entry.length,
+        name: entry.path,
+        async read(offset, length) {
+          cached ??= pak.readEntry(entry);
+          const all = await cached;
+          return all.subarray(offset, Math.min(all.length, offset + length));
+        },
+      };
+    }
+    const { source, base } = this.locate(entry);
+    return {
+      size: entry.length,
+      name: entry.path,
+      async read(offset, length) {
+        const end = Math.min(entry.length, offset + length);
+        if (offset >= end) return new Uint8Array(0);
+        return source.read(base + offset, end - offset);
+      },
+    };
+  }
+
+  /** Opens a vpk stored inside this one. */
+  async openNested(entry: VpkEntry): Promise<VpkArchive> {
+    return VpkArchive.open(this.entrySource(entry));
+  }
+
   async readEntry(entry: VpkEntry): Promise<Uint8Array> {
     const total = entry.preload.length + entry.length;
     const out = new Uint8Array(total);
     out.set(entry.preload, 0);
     if (entry.length > 0) {
-      let source: ByteSource;
-      let base: number;
-      if (entry.archiveIndex === DIR_ARCHIVE_INDEX) {
-        source = this.dir;
-        base = this.headerSize + this.treeSize;
-      } else {
-        const archive = this.archives.get(entry.archiveIndex);
-        if (!archive) {
-          throw new Error(
-            `VPK: entry "${entry.path}" lives in archive _${String(entry.archiveIndex).padStart(3, '0')}.vpk, which was not provided`,
-          );
-        }
-        source = archive;
-        base = 0;
-      }
-      const data = await source.read(base + entry.offset, entry.length);
+      const { source, base } = this.locate(entry);
+      const data = await source.read(base, entry.length);
       if (data.length !== entry.length) throw new Error(`VPK: short read for "${entry.path}"`);
       out.set(data, entry.preload.length);
     }

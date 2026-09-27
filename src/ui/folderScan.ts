@@ -113,7 +113,90 @@ async function collect(dir: DirHandleLike, folder: string, depth: number, out: R
 export async function scanFolder(handle: DirHandleLike): Promise<FoundMap[]> {
   const raw: RawFile[] = [];
   await collect(handle, '', 0, raw, { left: 20000 });
+  return groupRawFiles(raw);
+}
 
+// --- Drag & drop of folders (legacy FileSystem Entry API) -----------------------------------
+// Works for folders the File System Access picker refuses (e.g. anything under Program Files).
+
+interface EntryLike {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  file?(ok: (f: File) => void, err: (e: unknown) => void): void;
+  createReader?(): { readEntries(ok: (entries: EntryLike[]) => void, err: (e: unknown) => void): void };
+}
+
+function readAllEntries(dir: EntryLike): Promise<EntryLike[]> {
+  return new Promise((resolve, reject) => {
+    const reader = dir.createReader!();
+    const all: EntryLike[] = [];
+    const step = () =>
+      reader.readEntries((batch) => {
+        if (batch.length === 0) resolve(all);
+        else {
+          all.push(...batch);
+          step();
+        }
+      }, reject);
+    step();
+  });
+}
+
+async function collectEntries(dir: EntryLike, folder: string, depth: number, out: RawFile[], budget: { left: number }): Promise<void> {
+  if (depth > 5 || budget.left <= 0) return;
+  for (const entry of await readAllEntries(dir)) {
+    if (budget.left-- <= 0) return;
+    if (entry.isFile && entry.file) {
+      const lower = entry.name.toLowerCase();
+      if (lower.endsWith('.vpk') || lower.endsWith('.vmap')) {
+        const file = await new Promise<File>((ok, err) => entry.file!(ok, err));
+        out.push({ folder, file });
+      }
+    } else if (entry.isDirectory && entry.createReader) {
+      const lower = entry.name.toLowerCase();
+      if (lower.startsWith('.')) continue;
+      await collectEntries(entry, folder ? `${folder}/${entry.name}` : entry.name, depth + 1, out, budget);
+    }
+  }
+}
+
+/** True when the drag payload contains at least one folder. */
+export function dropHasDirectory(items: DataTransferItemList | null | undefined): boolean {
+  if (!items) return false;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i] as DataTransferItem & { webkitGetAsEntry?: () => EntryLike | null };
+    const entry = item.webkitGetAsEntry?.();
+    if (entry?.isDirectory) return true;
+  }
+  return false;
+}
+
+/** Scans dropped folders (and loose files) for maps. */
+export async function scanDroppedItems(items: DataTransferItemList): Promise<{ label: string; maps: FoundMap[] }> {
+  const raw: RawFile[] = [];
+  const names: string[] = [];
+  const budget = { left: 20000 };
+  // entries must be grabbed synchronously before any await
+  const entries: EntryLike[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i] as DataTransferItem & { webkitGetAsEntry?: () => EntryLike | null };
+    const entry = item.webkitGetAsEntry?.();
+    if (entry) entries.push(entry);
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory) {
+      names.push(entry.name);
+      await collectEntries(entry, entry.name, 0, raw, budget);
+    } else if (entry.isFile && entry.file) {
+      const file = await new Promise<File>((ok, err) => entry.file!(ok, err));
+      raw.push({ folder: '', file });
+    }
+  }
+  return { label: names.join(', ') || 'dropped files', maps: groupRawFiles(raw) };
+}
+
+function groupRawFiles(raw: RawFile[]): FoundMap[] {
   const maps: FoundMap[] = [];
   // vpks: group by folder + base name
   const groups = new Map<string, RawFile[]>();

@@ -3,6 +3,7 @@ import type { ParsedMap } from '../model/entity';
 import { EntityGraph } from '../model/graph';
 import type { EntWatchConfig } from '../model/entwatch';
 import { detectLang, type Lang } from './i18n';
+import type { FoundMap } from './folderScan';
 
 export interface LoadingState {
   active: boolean;
@@ -27,6 +28,8 @@ export interface AppState {
   suggestionNotes: string[];
   toast: string | null;
   jsonComments: boolean;
+  /** Maps found by scanning a folder (picker or drag & drop). */
+  foundMaps: { label: string; maps: FoundMap[] } | null;
 }
 
 const initialState: AppState = {
@@ -45,6 +48,7 @@ const initialState: AppState = {
   suggestionNotes: [],
   toast: null,
   jsonComments: true,
+  foundMaps: null,
 };
 
 type Listener = () => void;

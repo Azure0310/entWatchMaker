@@ -13,10 +13,13 @@ English summary is at the bottom.
 
 - **読み込み**
   - Workshop `.vpk`（単体、または `_dir.vpk` + `_000.vpk`… の分割形式）— 中の `*.vents_c`（エンティティランプ）を直接解析します。
+    Workshop のアイテム（`steamapps\workshop\content\730\<ID>\<ID>.vpk`）はアドオン vpk の中に `maps/<マップ名>.vpk` が
+    入れ子になっていますが、入れ子の vpk も（メモリに展開せず）そのまま辿ります。
     `point_template` の子ランプも読むので、テンプレートで生成される武器も一覧に出ます（`T` バッジ）。
   - Hammer `.vmap`（DMX binary 9）— プレハブの `.vmap` を一緒にドロップすると、プレハブ内のエンティティも
     `プレハブのnodeID:エンティティのnodeID` 形式の hammerid で取り込みます。
   - Chrome / Edge では「フォルダから選ぶ」で `steamapps\workshop\content\730` などを指定すると、中のマップを一覧から直接読み込めます（次回以降は同じフォルダをワンクリックで再オープン）。
+    Steam が `Program Files` 配下にある場合はブラウザの制限でこのダイアログから開けないので、エクスプローラーからフォルダをページにドラッグ＆ドロップしてください（同じ一覧が出ます）。
 - **一覧**: `weapon_*` だけ / 全エンティティの切り替え、名前・classname・hammerid 検索。
 - **関連ツリー**: 選択したエンティティから、Output の接続先 / 自分を対象にする接続元 / 親子 (`parentname`) /
   `filtername` や `template01` などのキー参照をたどって関係を木構造で表示（深さ 1〜5）。
@@ -123,8 +126,10 @@ them (relation tree + Inputs/Outputs tables), and writes the `<mapname>.jsonc` c
 EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
 (`addons/cs2fixes/configs/entwatch/maps/`). Nothing is uploaded; parsing runs in a Web Worker.
 
-- Formats: VPK (single or split), Source 2 resources, binary KV3 v0–v5 (LZ4/Zstd), `*.vents_c` entity lumps
-  including `point_template` child lumps, DMX binary 9 `.vmap` with prefab lineage hammer ids.
+- Formats: VPK (single or split, and the nested `maps/<name>.vpk` inside workshop packages), Source 2 resources,
+  binary KV3 v0–v5 (LZ4/Zstd), `*.vents_c` entity lumps including `point_template` child lumps, DMX binary 9 `.vmap`
+  with prefab lineage hammer ids. Folders can be dropped onto the page (works for Steam installs under Program Files,
+  which the folder picker dialog refuses).
 - No install needed: download [`release/entwatchmaker.html`](release/entwatchmaker.html) and open it in Chrome / Edge
   (the parser worker is inlined, so it runs from `file://`). "Pick a folder" scans a local folder such as
   `steamapps\workshop\content\730` and lists the maps in it; nothing is uploaded.
