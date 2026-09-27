@@ -3,6 +3,7 @@ import { friendlyName, type MapEntity } from './entity';
 import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entwatch';
 import { newHandler, newItem } from './entwatch';
 import { inferCooldown } from './cooldown';
+import { suggestEvents } from './events';
 
 /** Outputs entity classes are known to fire (used for the event picker). */
 export const KNOWN_OUTPUTS: Record<string, string[]> = {
@@ -56,9 +57,10 @@ export const KNOWN_OUTPUTS: Record<string, string[]> = {
 
 const GENERIC_OUTPUTS = ['OnUser1', 'OnUser2', 'OnUser3', 'OnUser4', 'OnKilled'];
 
-/** All output names an entity could plausibly fire: its actual connections first, then class defaults. */
-export function outputChoices(e: MapEntity): string[] {
+/** All output names an entity could plausibly fire: best guesses first, then class defaults. */
+export function outputChoices(e: MapEntity, graph?: EntityGraph): string[] {
   const set = new Set<string>();
+  if (graph) for (const g of suggestEvents(graph, e)) set.add(g.event);
   for (const c of e.connections) if (c.output) set.add(c.output);
   for (const o of KNOWN_OUTPUTS[e.classname] ?? []) set.add(o);
   for (const o of GENERIC_OUTPUTS) set.add(o);
@@ -72,12 +74,21 @@ export interface HandlerSuggestion {
   reason: string;
   cooldown?: number;
   cooldownReason?: string;
+  eventReason?: string;
 }
 
-/** Guesses handler type/event, and the cooldown from Lock/Unlock style wiring when a graph is given. */
+/**
+ * Guesses handler type/event, and the cooldown from Lock/Unlock style wiring when a graph is
+ * given. With a graph the event is the output whose chain leads to the delayed Unlock/Enable.
+ */
 export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSuggestion {
   const s = suggestHandlerBase(e);
   if (graph && s.type !== 'counterup' && s.type !== 'counterdown') {
+    const top = suggestEvents(graph, e)[0];
+    if (top) {
+      s.event = top.event;
+      s.eventReason = top.reason;
+    }
     const cd = inferCooldown(graph, e);
     if (cd) {
       s.cooldown = cd.seconds;
@@ -243,6 +254,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     });
     item.handlers.push(h);
     notes.push(`handler ${friendlyName(ent.targetname) || cls} (${s.type}${s.event ? ' ' + s.event : ''}): ${c.why}`);
+    if (s.eventReason && s.event) notes.push(`event ${s.event}: ${s.eventReason}`);
     if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
   }
   item.triggers = triggers;

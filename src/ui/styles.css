@@ -202,3 +202,8 @@ table.io td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-a
 .remap-panel .row { display: flex; align-items: center; gap: 10px; }
 .remap-report { margin-top: 6px; }
 .remap-unresolved { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 3px 0; }
+
+.io-search { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.io-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.io-controls .input { flex: 1 1 260px; }
+.io-hint { padding: 4px 10px; border-bottom: 1px solid var(--line); }
