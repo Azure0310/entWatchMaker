@@ -6,26 +6,46 @@ import { newHandler, newItem, parseEntWatchConfig, serializeEntWatchConfig, type
 import { suggestHandler, suggestItemForWeapon } from '../model/suggest';
 import { parseMapFiles } from '../worker/client';
 import { buildDemoMap } from '../model/demo';
+import { hintsFromGraph, hintsFromJsonc, remapConfig, replaceHammerId, staleHammerIds, type HintMap } from '../model/remap';
 import type { Lang } from './i18n';
 
 const CONFIG_KEY = (mapName: string) => `entwatchmaker.config.${mapName}`;
+const HINTS_KEY = (mapName: string) => `entwatchmaker.hints.${mapName}`;
+
+/** Merges what the current map says about the config's hammerids into the remembered hints. */
+function refreshHints(): HintMap {
+  const { graph, config, hints } = store.get();
+  const merged: HintMap = new Map(hints);
+  if (graph) for (const [k, v] of hintsFromGraph(config, graph)) merged.set(k, v);
+  store.set({ hints: merged });
+  return merged;
+}
 
 function persistConfig(): void {
   const { map, config } = store.get();
   if (!map) return;
+  const hints = refreshHints();
   try {
-    if (config.items.length === 0) localStorage.removeItem(CONFIG_KEY(map.mapName));
-    else localStorage.setItem(CONFIG_KEY(map.mapName), serializeEntWatchConfig(config, { comments: false }));
+    if (config.items.length === 0) {
+      localStorage.removeItem(CONFIG_KEY(map.mapName));
+      localStorage.removeItem(HINTS_KEY(map.mapName));
+    } else {
+      localStorage.setItem(CONFIG_KEY(map.mapName), serializeEntWatchConfig(config, { comments: false }));
+      localStorage.setItem(HINTS_KEY(map.mapName), JSON.stringify([...hints.entries()]));
+    }
   } catch {
     // storage unavailable
   }
 }
 
-function restoreConfig(mapName: string): EntWatchConfig | null {
+function restoreConfig(mapName: string): { config: EntWatchConfig; hints: HintMap } | null {
   try {
     const text = localStorage.getItem(CONFIG_KEY(mapName));
     if (!text) return null;
-    return parseEntWatchConfig(text).config;
+    const hints: HintMap = new Map();
+    const raw = localStorage.getItem(HINTS_KEY(mapName));
+    if (raw) for (const [k, v] of JSON.parse(raw) as [string, { classname?: string; targetname?: string }][]) hints.set(k, v);
+    return { config: parseEntWatchConfig(text).config, hints };
   } catch {
     return null;
   }
@@ -49,22 +69,41 @@ export function setLang(lang: Lang): void {
 
 function applyMap(map: ParsedMap): void {
   const graph = buildGraph(map);
+  const prev = store.get();
+  // hints from the map we are leaving, so a config carried over to a new version can be re-matched
+  const carried: HintMap = new Map(prev.hints);
+  if (prev.graph) for (const [k, v] of hintsFromGraph(prev.config, prev.graph)) carried.set(k, v);
   const restored = restoreConfig(map.mapName);
+  // keep the current config when nothing is saved for this map name (e.g. renamed map version)
+  const config = restored?.config ?? (prev.config.items.length > 0 ? prev.config : { items: [] });
+  const hints: HintMap = new Map(carried);
+  if (restored) for (const [k, v] of restored.hints) hints.set(k, v);
   const firstWeapon = map.entities.find((e) => e.classname.startsWith('weapon_')) ?? map.entities[0] ?? null;
   store.set({
     map,
     graph,
     loading: { active: false, message: '' },
     error: null,
-    config: restored ?? { items: [] },
-    selectedItemUid: restored?.items[0]?.uid ?? null,
+    config,
+    hints,
+    remapReport: null,
+    selectedItemUid: config.items[0]?.uid ?? null,
     selectedEntityId: firstWeapon?.id ?? null,
     treeRootId: firstWeapon?.id ?? null,
     suggestionNotes: [],
     weaponsOnly: map.stats.weapons > 0,
     query: '',
   });
-  if (restored) showToast(store.get().lang === 'ja' ? '前回の設定を復元しました' : 'Restored your previous config for this map');
+  const lang = store.get().lang;
+  if (restored) showToast(lang === 'ja' ? '前回の設定を復元しました' : 'Restored your previous config for this map');
+  const stale = staleHammerIds(config, graph, hints);
+  if (stale.length > 0) {
+    showToast(
+      lang === 'ja'
+        ? `${stale.length} 件の hammerid がこのマップと一致しません。「名前で再照合」を試してください`
+        : `${stale.length} hammerids do not match this map. Try "Re-match by name"`,
+    );
+  }
 }
 
 export async function loadFiles(files: File[]): Promise<void> {
@@ -251,6 +290,10 @@ export function removeTrigger(itemUid: string, hammerid: string): void {
 
 export function importConfigText(text: string, mode: 'replace' | 'append'): { count: number; warnings: string[] } {
   const { config, warnings } = parseEntWatchConfig(text);
+  // comments written by this tool ("hammerid": "123", // classname name) double as re-match hints
+  const hints: HintMap = new Map(store.get().hints);
+  for (const [k, v] of hintsFromJsonc(text)) if (!hints.has(k)) hints.set(k, v);
+  store.set({ hints, remapReport: null });
   updateConfig((c) => ({ items: mode === 'replace' ? config.items : [...c.items, ...config.items] }));
   store.set({ selectedItemUid: config.items[0]?.uid ?? store.get().selectedItemUid, suggestionNotes: [] });
   return { count: config.items.length, warnings };
@@ -258,5 +301,38 @@ export function importConfigText(text: string, mode: 'replace' | 'append'): { co
 
 export function clearConfig(): void {
   updateConfig(() => ({ items: [] }));
-  store.set({ selectedItemUid: null, suggestionNotes: [] });
+  store.set({ selectedItemUid: null, suggestionNotes: [], remapReport: null });
+}
+
+/** Re-resolves hammerids that are missing or point at a different entity, using the hints. */
+export function remapNow(): { changed: number; unresolved: number } {
+  const { graph, config, hints } = store.get();
+  if (!graph) return { changed: 0, unresolved: 0 };
+  const r = remapConfig(config, graph, hints);
+  const newHints: HintMap = new Map(hints);
+  for (const c of r.changes) newHints.set(c.to, hints.get(c.from) ?? { classname: c.entity.classname, targetname: c.entity.targetname || undefined });
+  store.set({ hints: newHints, remapReport: { changes: r.changes, unresolved: r.unresolved } });
+  updateConfig(() => r.config);
+  return { changed: r.changes.length, unresolved: r.unresolved.length };
+}
+
+/** Applies one candidate chosen by the user for an unresolved hammerid. */
+export function pickRemapCandidate(from: string, entity: MapEntity): void {
+  const { hints, remapReport } = store.get();
+  const newHints: HintMap = new Map(hints);
+  newHints.set(entity.hammerId, hints.get(from) ?? { classname: entity.classname, targetname: entity.targetname || undefined });
+  store.set({
+    hints: newHints,
+    remapReport: remapReport
+      ? {
+          changes: [...remapReport.changes, { from, to: entity.hammerId, entity, reason: 'chosen manually' }],
+          unresolved: remapReport.unresolved.filter((u) => u.hammerid !== from),
+        }
+      : null,
+  });
+  updateConfig((c) => replaceHammerId(c, from, entity.hammerId));
+}
+
+export function clearRemapReport(): void {
+  store.set({ remapReport: null });
 }

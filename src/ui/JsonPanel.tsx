@@ -6,6 +6,7 @@ import { importConfigText, setJsonComments, showToast } from './actions';
 import { useAppState } from './store';
 import { useT } from './useT';
 import type { StringKey } from './i18n';
+import { RemapPanel } from './RemapPanel';
 
 export function JsonPanel({ issues }: { issues: ValidationIssue[] }) {
   const t = useT();
@@ -117,6 +118,7 @@ export function JsonPanel({ issues }: { issues: ValidationIssue[] }) {
           </div>
         </div>
       )}
+      <RemapPanel issues={issues} />
       <div className="issues-summary">
         <strong>{t('json.issues')}:</strong>{' '}
         {issues.length === 0 ? (

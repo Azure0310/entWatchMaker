@@ -4,6 +4,7 @@ import { EntityGraph } from '../model/graph';
 import type { EntWatchConfig } from '../model/entwatch';
 import { detectLang, type Lang } from './i18n';
 import type { FoundMap } from './folderScan';
+import type { HintMap, RemapChange, RemapUnresolved } from '../model/remap';
 
 export interface LoadingState {
   active: boolean;
@@ -30,6 +31,9 @@ export interface AppState {
   jsonComments: boolean;
   /** Maps found by scanning a folder (picker or drag & drop). */
   foundMaps: { label: string; maps: FoundMap[] } | null;
+  /** What each hammerid in the config pointed at (classname/targetname), for re-matching. */
+  hints: HintMap;
+  remapReport: { changes: RemapChange[]; unresolved: RemapUnresolved[] } | null;
 }
 
 const initialState: AppState = {
@@ -49,6 +53,8 @@ const initialState: AppState = {
   toast: null,
   jsonComments: true,
   foundMaps: null,
+  hints: new Map(),
+  remapReport: null,
 };
 
 type Listener = () => void;

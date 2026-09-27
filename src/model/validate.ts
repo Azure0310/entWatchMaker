@@ -1,6 +1,7 @@
 import type { EntityGraph } from './graph';
 import type { EntWatchConfig } from './entwatch';
 import { outputChoices } from './suggest';
+import { hintMatches, type HintMap } from './remap';
 
 export interface ValidationIssue {
   level: 'error' | 'warning' | 'info';
@@ -11,10 +12,21 @@ export interface ValidationIssue {
   detail?: string;
 }
 
-export function validateConfig(config: EntWatchConfig, graph: EntityGraph | null): ValidationIssue[] {
+export function validateConfig(config: EntWatchConfig, graph: EntityGraph | null, hints?: HintMap): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const seen = new Map<string, string>();
+  const stale = (hid: string, itemUid: string, handlerUid?: string) => {
+    if (!graph || !hints) return;
+    const hint = hints.get(hid);
+    const e = graph.byHammerId.get(hid)?.[0];
+    if (hint && e && !hintMatches(hint, e)) {
+      issues.push({ level: 'warning', itemUid, handlerUid, key: 'v.idPointsElsewhere', detail: `${hid}: ${hint.classname ?? ''} ${hint.targetname ?? ''} → ${e.classname} ${e.targetname}`.trim() });
+    }
+  };
   for (const item of config.items) {
+    stale(item.hammerid, item.uid);
+    for (const t of item.triggers) stale(t, item.uid);
+    for (const h of item.handlers) stale(h.hammerid, item.uid, h.uid);
     if (!item.hammerid) issues.push({ level: 'error', itemUid: item.uid, key: 'v.itemNoHammerId' });
     if (!item.name) issues.push({ level: 'warning', itemUid: item.uid, key: 'v.itemNoName' });
     if (item.hammerid) {
