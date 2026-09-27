@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { EntityConnection, MapEntity } from '../model/entity';
 import { friendlyName } from '../model/entity';
 import { addHandler, addItemFromEntity, addTrigger, selectEntity, setItemWeapon, setTreeRoot } from './actions';
+import { inferCooldown } from '../model/cooldown';
 import { EntityChip } from './EntityChip';
 import { useAppState } from './store';
 import { useT } from './useT';
@@ -44,6 +45,7 @@ export function Inspector() {
 
   const item = config.items.find((i) => i.uid === selectedItemUid) ?? null;
   const incoming = graph.incomingConnections(e);
+  const cooldown = e.classname.startsWith('weapon_') || e.classname === 'math_counter' ? null : inferCooldown(graph, e);
   const name = friendlyName(e.targetname);
   const isTrigger = e.classname.startsWith('trigger_');
   const isWeapon = e.classname.startsWith('weapon_');
@@ -64,6 +66,11 @@ export function Inspector() {
           {t('insp.source')}: {e.source.container}
           {e.source.templated && <span className="badge tpl" title={t('insp.templated')}> templated</span>}
         </div>
+        {cooldown && (
+          <div className="small" data-testid="inferred-cooldown">
+            ⏱ {t('insp.cooldown', { s: cooldown.seconds })} <span className="muted">({cooldown.reason})</span>
+          </div>
+        )}
         <div className="btn-row">
           <button type="button" className="btn" onClick={() => setTreeRoot(e.id)}>
             {t('tree.setRoot')}

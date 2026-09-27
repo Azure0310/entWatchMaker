@@ -4,6 +4,7 @@ import { EntityGraph, buildRelationTree } from '../src/model/graph';
 import { suggestItemForWeapon, suggestItemName } from '../src/model/suggest';
 import { validateConfig } from '../src/model/validate';
 import { serializeEntWatchConfig } from '../src/model/entwatch';
+import { inferCooldown } from '../src/model/cooldown';
 
 describe('graph + suggestions on the demo map', () => {
   const map = buildDemoMap();
@@ -86,5 +87,37 @@ describe('graph + suggestions on the demo map', () => {
     item.handlers.push({ ...item.handlers[0], uid: 'x', hammerid: '99999' });
     const issues = validateConfig({ items: [item] }, graph);
     expect(issues.some((i) => i.key === 'v.handlerNotInMap')).toBe(true);
+  });
+});
+
+describe('cooldown inference from Lock/Unlock wiring', () => {
+  const map = buildDemoMap();
+  const graph = new EntityGraph(map.entities);
+  const byName = (n: string) => map.entities.find((e) => e.targetname === n)!;
+
+  it('reads the delayed Unlock on the button behind a filter handler', () => {
+    const { item, notes } = suggestItemForWeapon(byName('fire_weapon'), graph);
+    const filter = item.handlers.find((h) => h.hammerid === '1203')!;
+    expect(filter.cooldown).toBe(45);
+    expect(filter.mode).toBe(2);
+    expect(notes.some((n) => n.includes('cooldown 45s') && n.includes('Unlock'))).toBe(true);
+    // the plain +use button hook stays without cooldown
+    expect(item.handlers.find((h) => h.hammerid === '1202')!.cooldown).toBe(0);
+  });
+
+  it('reads the delayed Enable of a relay behind a game_ui handler', () => {
+    const { item } = suggestItemForWeapon(byName('heal_weapon'), graph);
+    const ui = item.handlers.find((h) => h.hammerid === '1402')!;
+    expect(ui.cooldown).toBe(60);
+    expect(ui.mode).toBe(2);
+  });
+
+  it('falls back to the button wait key and leaves counters alone', () => {
+    const btn = byName('ice_button');
+    const guess = inferCooldown(graph, btn);
+    expect(guess?.seconds).toBe(2);
+    expect(guess?.reason).toContain('wait');
+    const { item } = suggestItemForWeapon(byName('ice_weapon'), graph);
+    expect(item.handlers.find((h) => h.hammerid === '1303')!.cooldown).toBe(0);
   });
 });
