@@ -1,0 +1,28 @@
+{
+  "name": "entwatchmaker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Browser tool that reads CS2 .vmap / workshop .vpk files, lists weapon_ item entities with their related entities and I/O, and generates EntWatch <map>.jsonc configs for CS2Fixes.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "fzstd": "^0.1.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0",
+    "vitest": "^4.0.0"
+  }
+}
