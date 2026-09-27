@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type DragEvent } from 'react';
 import { loadDemo, loadFiles } from './actions';
 import { useAppState } from './store';
 import { useT } from './useT';
+import { FolderPicker } from './FolderPicker';
 
 export function DropZone({ compact = false }: { compact?: boolean }) {
   const t = useT();
@@ -61,6 +62,7 @@ export function DropZone({ compact = false }: { compact?: boolean }) {
           {t('drop.error')}: {error}
         </div>
       )}
+      {!compact && <FolderPicker />}
     </div>
   );
 }

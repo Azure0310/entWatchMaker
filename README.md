@@ -16,6 +16,7 @@ English summary is at the bottom.
     `point_template` の子ランプも読むので、テンプレートで生成される武器も一覧に出ます（`T` バッジ）。
   - Hammer `.vmap`（DMX binary 9）— プレハブの `.vmap` を一緒にドロップすると、プレハブ内のエンティティも
     `プレハブのnodeID:エンティティのnodeID` 形式の hammerid で取り込みます。
+  - Chrome / Edge では「フォルダから選ぶ」で `steamapps\workshop\content\730` などを指定すると、中のマップを一覧から直接読み込めます（次回以降は同じフォルダをワンクリックで再オープン）。
 - **一覧**: `weapon_*` だけ / 全エンティティの切り替え、名前・classname・hammerid 検索。
 - **関連ツリー**: 選択したエンティティから、Output の接続先 / 自分を対象にする接続元 / 親子 (`parentname`) /
   `filtername` や `template01` などのキー参照をたどって関係を木構造で表示（深さ 1〜5）。
@@ -125,7 +126,8 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
 - Formats: VPK (single or split), Source 2 resources, binary KV3 v0–v5 (LZ4/Zstd), `*.vents_c` entity lumps
   including `point_template` child lumps, DMX binary 9 `.vmap` with prefab lineage hammer ids.
 - No install needed: download [`release/entwatchmaker.html`](release/entwatchmaker.html) and open it in Chrome / Edge
-  (the parser worker is inlined, so it runs from `file://`).
+  (the parser worker is inlined, so it runs from `file://`). "Pick a folder" scans a local folder such as
+  `steamapps\workshop\content\730` and lists the maps in it; nothing is uploaded.
 - Workflow: drop files → pick a weapon → "Add as item" (handlers are suggested from parenting and outputs) →
   adjust event / mode / cooldown → download the jsonc. Existing configs can be imported and edited.
 - Dev: `npm install --legacy-peer-deps`, `npm run dev`, `npm test`, `npm run build`, `npm run build:single`. Deploy with the included

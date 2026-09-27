@@ -1,6 +1,5 @@
 /// <reference lib="webworker" />
-import { blobByteSource } from '../formats/vpk';
-import { groupVpkSources, loadMapFromVmaps, loadMapFromVpk } from '../model/loadMap';
+import { parseMapFilesDirect } from '../model/parseFiles';
 import type { ParsedMap } from '../model/entity';
 
 export interface ParseRequest {
@@ -10,6 +9,7 @@ export interface ParseRequest {
 }
 
 export type ParseResponse =
+  | { type: 'ready' }
   | { type: 'progress'; message: string; done?: number; total?: number }
   | { type: 'done'; map: ParsedMap }
   | { type: 'error'; message: string };
@@ -20,31 +20,20 @@ function post(msg: ParseResponse): void {
   ctx.postMessage(msg);
 }
 
-async function handle(req: ParseRequest): Promise<ParsedMap> {
-  const vpks = req.files.filter((f) => f.name.toLowerCase().endsWith('.vpk'));
-  const vmaps = req.files.filter((f) => f.name.toLowerCase().endsWith('.vmap'));
-  if (vpks.length === 0 && vmaps.length === 0) {
-    throw new Error('Drop a CS2 workshop .vpk or a Hammer .vmap file');
-  }
-  if (vpks.length > 0 && vmaps.length > 0) {
-    throw new Error('Drop either .vpk files or .vmap files, not both at once');
-  }
-  const progress = (message: string, done?: number, total?: number) => post({ type: 'progress', message, done, total });
-  if (vpks.length > 0) {
-    const { dir, archives } = groupVpkSources(vpks.map((f) => ({ name: f.name, source: blobByteSource(f, f.name) })));
-    return loadMapFromVpk(dir, archives, progress);
-  }
-  const files: { name: string; bytes: Uint8Array }[] = [];
-  for (const f of vmaps) {
-    progress(`Reading ${f.name}`);
-    files.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
-  }
-  return loadMapFromVmaps(files, req.mainVmap, progress);
-}
+ctx.addEventListener('error', (ev) => {
+  post({ type: 'error', message: `Worker error: ${ev.message || 'unknown'} (${ev.filename || '?'}:${ev.lineno || 0})` });
+});
+ctx.addEventListener('unhandledrejection', (ev) => {
+  const reason = (ev as PromiseRejectionEvent).reason;
+  post({ type: 'error', message: `Worker error: ${reason instanceof Error ? reason.message : String(reason)}` });
+});
 
 ctx.onmessage = (ev: MessageEvent<ParseRequest>) => {
   if (ev.data.type !== 'parse') return;
-  handle(ev.data)
+  const progress = (message: string, done?: number, total?: number) => post({ type: 'progress', message, done, total });
+  parseMapFilesDirect(ev.data.files, progress, ev.data.mainVmap)
     .then((map) => post({ type: 'done', map }))
     .catch((err: unknown) => post({ type: 'error', message: err instanceof Error ? err.message : String(err) }));
 };
+
+post({ type: 'ready' });
