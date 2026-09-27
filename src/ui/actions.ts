@@ -248,12 +248,13 @@ export function setItemWeapon(uid: string, entity: MapEntity): void {
 export function addHandler(itemUid: string, entity?: MapEntity): void {
   let h: HandlerConfig;
   if (entity) {
-    const s = suggestHandler(entity);
+    const s = suggestHandler(entity, store.get().graph ?? undefined);
     h = newHandler({
       type: s.type,
       hammerid: entity.hammerId,
       event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
       mode: s.mode,
+      cooldown: s.cooldown ?? 0,
     });
   } else {
     h = newHandler();

@@ -2,6 +2,7 @@ import type { EntityGraph } from './graph';
 import { friendlyName, type MapEntity } from './entity';
 import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entwatch';
 import { newHandler, newItem } from './entwatch';
+import { inferCooldown } from './cooldown';
 
 /** Outputs entity classes are known to fire (used for the event picker). */
 export const KNOWN_OUTPUTS: Record<string, string[]> = {
@@ -69,10 +70,25 @@ export interface HandlerSuggestion {
   event?: string;
   mode: HandlerMode;
   reason: string;
+  cooldown?: number;
+  cooldownReason?: string;
 }
 
-/** Guesses handler type/event from the entity class and its connections. */
-export function suggestHandler(e: MapEntity): HandlerSuggestion {
+/** Guesses handler type/event, and the cooldown from Lock/Unlock style wiring when a graph is given. */
+export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSuggestion {
+  const s = suggestHandlerBase(e);
+  if (graph && s.type !== 'counterup' && s.type !== 'counterdown') {
+    const cd = inferCooldown(graph, e);
+    if (cd) {
+      s.cooldown = cd.seconds;
+      s.cooldownReason = cd.reason;
+      if (s.mode === 1) s.mode = 2;
+    }
+  }
+  return s;
+}
+
+function suggestHandlerBase(e: MapEntity): HandlerSuggestion {
   const cls = e.classname;
   const outputs = new Set(e.connections.map((c) => c.output));
   const pick = (...candidates: string[]): string | undefined => candidates.find((c) => outputs.has(c)) ?? candidates[0];
@@ -215,18 +231,19 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       cls === 'game_ui' || cls === 'math_counter' || cls.startsWith('filter_') || cls === 'logic_relay' || cls === 'logic_case' ||
       cls === 'logic_branch' || cls === 'logic_compare' || cls === 'logic_timer' || cls.startsWith('prop_physics');
     if (!wantsHandler) continue;
-    const s = suggestHandler(ent);
+    const s = suggestHandler(ent, graph);
     const h: HandlerConfig = newHandler({
       type: s.type,
       hammerid: ent.hammerId,
       event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
       mode: s.mode,
-      cooldown: 0,
+      cooldown: s.cooldown ?? 0,
       maxuses: 0,
       templated: ent.source.templated && !e.source.templated ? true : undefined,
     });
     item.handlers.push(h);
     notes.push(`handler ${friendlyName(ent.targetname) || cls} (${s.type}${s.event ? ' ' + s.event : ''}): ${c.why}`);
+    if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
   }
   item.triggers = triggers;
   // When a filter / relay / counter handler follows the button, the button entry only needs to hook
