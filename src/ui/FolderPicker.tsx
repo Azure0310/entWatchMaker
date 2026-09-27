@@ -1,26 +1,26 @@
 import { useEffect, useState } from 'react';
-import { loadFiles } from './actions';
-import { ensurePermission, formatSize, loadSavedHandle, pickFolder, scanFolder, supportsDirectoryPicker, type FoundMap } from './folderScan';
+import { loadFiles, setFoundMaps } from './actions';
+import { ensurePermission, formatSize, loadSavedHandle, pickFolder, scanFolder, supportsDirectoryPicker } from './folderScan';
+import { useAppState } from './store';
 import { useT } from './useT';
 
 type Handle = Awaited<ReturnType<typeof pickFolder>>;
 
 export function FolderPicker() {
   const t = useT();
+  const { foundMaps } = useAppState();
   const [supported] = useState(() => supportsDirectoryPicker());
   const [saved, setSaved] = useState<Handle | null>(null);
   const [handle, setHandle] = useState<Handle | null>(null);
-  const [maps, setMaps] = useState<FoundMap[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
+  const maps = foundMaps?.maps ?? null;
 
   useEffect(() => {
     if (!supported) return;
     void loadSavedHandle().then((h) => setSaved(h as Handle | null));
   }, [supported]);
-
-  if (!supported) return null;
 
   const scan = async (h: Handle) => {
     setBusy(true);
@@ -31,7 +31,7 @@ export function FolderPicker() {
         return;
       }
       setHandle(h);
-      setMaps(await scanFolder(h));
+      setFoundMaps({ label: h.name, maps: await scanFolder(h) });
     } catch (err) {
       if ((err as DOMException)?.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : String(err));
@@ -56,9 +56,11 @@ export function FolderPicker() {
   return (
     <div className="folder-picker" data-testid="folder-picker">
       <div className="dropzone-actions">
-        <button type="button" className="btn" onClick={() => void pick()} disabled={busy} data-testid="pick-folder">
-          📁 {t('folder.pick')}
-        </button>
+        {supported && (
+          <button type="button" className="btn" onClick={() => void pick()} disabled={busy} data-testid="pick-folder">
+            📁 {t('folder.pick')}
+          </button>
+        )}
         {saved && !handle && (
           <button type="button" className="btn" onClick={() => void scan(saved)} disabled={busy}>
             ↻ {t('folder.reopen', { name: saved.name })}
@@ -71,6 +73,7 @@ export function FolderPicker() {
         )}
       </div>
       <div className="muted small">{t('folder.hint')}</div>
+      <div className="muted small">{t('folder.blockedHint')}</div>
       {busy && (
         <div className="dropzone-status">
           <span className="spinner" /> {t('folder.scanning')}
@@ -81,7 +84,7 @@ export function FolderPicker() {
         <div className="folder-results">
           <div className="row">
             <strong>
-              {handle?.name} — {t('folder.found', { n: maps.length })}
+              {foundMaps?.label} — {t('folder.found', { n: maps.length })}
             </strong>
             <input className="input" placeholder={t('folder.filter')} value={filter} onChange={(e) => setFilter(e.target.value)} style={{ maxWidth: 240 }} />
           </div>

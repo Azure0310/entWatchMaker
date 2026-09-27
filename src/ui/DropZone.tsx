@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, type DragEvent } from 'react';
-import { loadDemo, loadFiles } from './actions';
+import { loadDemo, loadFiles, setFoundMaps } from './actions';
+import { dropHasDirectory, scanDroppedItems } from './folderScan';
 import { useAppState } from './store';
 import { useT } from './useT';
 import { FolderPicker } from './FolderPicker';
@@ -13,6 +14,11 @@ export function DropZone({ compact = false }: { compact?: boolean }) {
   const onDrop = useCallback((ev: DragEvent<HTMLDivElement>) => {
     ev.preventDefault();
     setOver(false);
+    if (dropHasDirectory(ev.dataTransfer.items)) {
+      // a folder was dropped: list the maps inside instead of parsing straight away
+      void scanDroppedItems(ev.dataTransfer.items).then((found) => setFoundMaps(found));
+      return;
+    }
     const files = Array.from(ev.dataTransfer.files);
     void loadFiles(files);
   }, []);

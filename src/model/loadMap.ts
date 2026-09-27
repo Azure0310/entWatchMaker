@@ -21,16 +21,60 @@ function finish(map: Omit<ParsedMap, 'stats'>): ParsedMap {
 // Compiled maps (workshop .vpk)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Finds the package that actually holds the compiled map. CS2 workshop items are addon packages
+ * with the compiled map nested inside as `maps/<name>.vpk`, so we descend into nested vpks
+ * (without copying them) until entity lumps show up.
+ */
+async function findMapPackage(
+  pak: VpkArchive,
+  progress: ProgressFn | undefined,
+  depth: number,
+  chain: string[],
+): Promise<{ pak: VpkArchive; chain: string[] } | null> {
+  if (pak.entries.some((e) => e.ext === 'vents_c')) return { pak, chain };
+  if (depth >= 2) return null;
+  const nested = pak.entries
+    .filter((e) => e.ext === 'vpk' && e.length > 0)
+    // compiled maps first, biggest first
+    .sort((a, b) => Number(b.dir.toLowerCase().startsWith('maps')) - Number(a.dir.toLowerCase().startsWith('maps')) || b.length - a.length);
+  for (const entry of nested) {
+    progress?.(`Opening nested package ${entry.path}`);
+    try {
+      const inner = await pak.openNested(entry);
+      const found = await findMapPackage(inner, progress, depth + 1, [...chain, entry.path]);
+      if (found) return found;
+    } catch (err) {
+      progress?.(`Skipping ${entry.path}: ${(err as Error).message}`);
+    }
+  }
+  return null;
+}
+
+function describePackage(pak: VpkArchive): string {
+  const exts = new Map<string, number>();
+  for (const e of pak.entries) exts.set(e.ext || '(none)', (exts.get(e.ext || '(none)') ?? 0) + 1);
+  const top = [...exts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}×${v}`);
+  return `${pak.entries.length} files: ${top.join(', ')}`;
+}
+
 export async function loadMapFromVpk(dir: ByteSource, archives: Map<number, ByteSource>, progress?: ProgressFn): Promise<ParsedMap> {
   progress?.('Reading VPK directory');
-  const pak = await VpkArchive.open(dir, archives);
+  const outer = await VpkArchive.open(dir, archives);
   const warnings: string[] = [];
+
+  const found = await findMapPackage(outer, progress, 0, []);
+  if (!found) {
+    throw new Error(
+      `No entity lumps (*.vents_c) found in this VPK (${describePackage(outer)}). ` +
+        'Expected a compiled CS2 map, or a workshop package containing maps/<name>.vpk.',
+    );
+  }
+  const pak = found.pak;
+  if (found.chain.length > 0) warnings.push(`Compiled map read from nested package ${found.chain.join(' → ')}`);
 
   const mapResources = pak.entries.filter((e) => e.ext === 'vmap_c' && e.dir.toLowerCase().startsWith('maps'));
   const lumpEntries = pak.entries.filter((e) => e.ext === 'vents_c');
-  if (lumpEntries.length === 0) {
-    throw new Error('No entity lumps (*.vents_c) found in this VPK. Is it a compiled CS2 map?');
-  }
 
   // Pick the map whose folder owns the most lumps (a workshop vpk normally has exactly one).
   let mapName = '';
@@ -54,6 +98,11 @@ export async function loadMapFromVpk(dir: ByteSource, archives: Map<number, Byte
     const m = /^maps\/(.+?)\/entities\//i.exec(first.path);
     mapName = m ? m[1].split('/').pop()! : dir.name.replace(/\.vpk$/i, '');
     mapDir = m ? `maps/${m[1]}/`.toLowerCase() : '';
+  }
+  // workshop packages are named by their numeric id; the nested map vpk carries the real name
+  if (/^\d+$/.test(mapName) && found.chain.length > 0) {
+    const inner = found.chain[found.chain.length - 1].replace(/\\/g, '/').split('/').pop()!.replace(/\.vpk$/i, '');
+    if (inner) mapName = inner;
   }
 
   const relevantLumps = lumpEntries.filter((l) => !mapDir || l.path.toLowerCase().startsWith(mapDir));

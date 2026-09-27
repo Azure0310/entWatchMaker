@@ -1,4 +1,4 @@
-import { store } from './store';
+import { store, type AppState } from './store';
 import { buildGraph } from './store';
 import type { MapEntity, ParsedMap } from '../model/entity';
 import { friendlyName } from '../model/entity';
@@ -108,6 +108,10 @@ export function setWeaponsOnly(weaponsOnly: boolean): void {
 
 export function setJsonComments(jsonComments: boolean): void {
   store.set({ jsonComments });
+}
+
+export function setFoundMaps(foundMaps: AppState['foundMaps']): void {
+  store.set({ foundMaps });
 }
 
 // ---------------------------------------------------------------------------------------------
