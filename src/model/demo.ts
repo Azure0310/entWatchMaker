@@ -4,6 +4,13 @@ import type { MapEntity, ParsedMap } from './entity';
  * A small hand-written map that mimics a typical Zombie Escape item setup so the UI can be
  * explored without map files.
  */
+function lumpFor(hammerId: string): string {
+  const n = parseInt(hammerId, 10);
+  if (n >= 2100) return 'demo_template_3';
+  if (n >= 2000) return 'demo_template_2';
+  return 'demo_template_1';
+}
+
 export function buildDemoMap(): ParsedMap {
   let id = 0;
   const mk = (
@@ -20,7 +27,7 @@ export function buildDemoMap(): ParsedMap {
     targetname,
     props: { classname, targetname, hammeruniqueid: hammerId, ...props },
     connections,
-    source: { kind: 'vpk', file: 'maps/ze_demo/entities/default_ents.vents_c', container: templated ? 'demo_template_1' : 'default_ents', scope: '', templated },
+    source: { kind: 'vpk', file: 'maps/ze_demo/entities/default_ents.vents_c', container: templated ? lumpFor(hammerId) : 'default_ents', scope: '', templated },
   });
   const c = (output: string, target: string, input: string, param = '', delay = 0, timesToFire = -1) => ({ output, target, targetType: 7, input, param, delay, timesToFire });
 
@@ -49,6 +56,18 @@ export function buildDemoMap(): ParsedMap {
     mk('game_ui', 'heal_ui', '1402', { fieldofview: '-1' }, [c('PressedAttack', 'heal_relay', 'Trigger'), c('PlayerOff', 'heal_ui', 'Deactivate')]),
     mk('logic_relay', 'heal_relay', '1403', {}, [c('OnTrigger', 'heal_hurt', 'Enable'), c('OnTrigger', 'heal_hurt', 'Disable', '', 3), c('OnTrigger', 'heal_relay', 'Disable'), c('OnTrigger', 'heal_relay', 'Enable', '', 60)]),
     mk('trigger_hurt', 'heal_hurt', '1404', { damage: '-100', startdisabled: '1', parentname: 'heal_weapon' }),
+    // Sleep materia (template style, like many workshop maps): weapon and button are both parented to a
+    // prop, the relay is only linked through the point_template and carries its own cooldown.
+    mk('point_template', 'sleep_template', '2000', { entitylumpname: 'demo_template_2', template01: 'sleep_prop', template02: 'sleep_weapon', template03: 'sleep_button', template04: 'sleep_relay' }),
+    mk('prop_dynamic', 'sleep_prop', '2001', { model: 'models/materia.vmdl' }, [], true),
+    mk('weapon_elite', 'sleep_weapon', '2002', { parentname: 'sleep_prop' }, [], true),
+    mk('func_button', 'sleep_button', '2003', { parentname: 'sleep_prop', spawnflags: '1024', wait: '1' }, [c('OnPressed', 'sleep_relay', 'Trigger')], true),
+    mk('logic_relay', 'sleep_relay', '2004', {}, [c('OnTrigger', '!self', 'Disable'), c('OnTrigger', '!self', 'Enable', '', 60), c('OnTrigger', 'sleep_zone', 'Enable'), c('OnTrigger', 'sleep_zone', 'Disable', '', 8)], true),
+    mk('trigger_multiple', 'sleep_zone', '2005', { startdisabled: '1', parentname: 'sleep_prop' }, [c('OnStartTouch', '!activator', 'SetSpeed', '0.3')], true),
+    // Gravity: weapon and a self-cooling relay share a template lump but nothing references anything
+    mk('point_template', 'gravity_template', '2100', { entitylumpname: 'demo_template_3', template01: 'gravity_weapon', template02: 'gravity_relay' }),
+    mk('weapon_mac10', 'gravity_weapon', '2101', { origin: '900 900 0' }, [], true),
+    mk('logic_relay', 'gravity_relay', '2102', { origin: '910 900 0' }, [c('OnTrigger', '!self', 'Disable'), c('OnTrigger', '!self', 'Enable', '', 45), c('OnTrigger', '!activator', 'AddOutput', 'gravity 0.2')], true),
     // Unrelated stuff
     mk('logic_auto', 'map_auto', '1500', {}, [c('OnMultiNewRound', 'round_relay', 'Trigger')]),
     mk('logic_relay', 'round_relay', '1501', {}, [c('OnTrigger', 'ice_template', 'ForceSpawn')]),
@@ -62,7 +81,7 @@ export function buildDemoMap(): ParsedMap {
     entities,
     warnings: [],
     stats: {
-      lumps: 2,
+      lumps: 4,
       entities: entities.length,
       connections: entities.reduce((n, e) => n + e.connections.length, 0),
       weapons: entities.filter((e) => e.classname.startsWith('weapon_')).length,

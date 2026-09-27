@@ -121,3 +121,43 @@ describe('cooldown inference from Lock/Unlock wiring', () => {
     expect(item.handlers.find((h) => h.hammerid === '1303')!.cooldown).toBe(0);
   });
 });
+
+describe('template style items without name references', () => {
+  const map = buildDemoMap();
+  const graph = new EntityGraph(map.entities);
+  const byName = (n: string) => map.entities.find((e) => e.targetname === n)!;
+
+  it('finds the button via the shared parent prop and the relay via the template', () => {
+    const { item, notes } = suggestItemForWeapon(byName('sleep_weapon'), graph);
+    const ids = item.handlers.map((h) => h.hammerid);
+    expect(ids).toContain('2003'); // button, sibling under sleep_prop
+    expect(ids).toContain('2004'); // relay, template member fed by the button
+    const relay = item.handlers.find((h) => h.hammerid === '2004')!;
+    expect(relay.event).toBe('OnTrigger');
+    expect(relay.cooldown).toBe(60);
+    expect(relay.mode).toBe(2);
+    const button = item.handlers.find((h) => h.hammerid === '2003')!;
+    expect(button.type).toBe('button');
+    expect(button.event).toBeUndefined(); // plain +use hook
+    expect(item.triggers).toContain('2005'); // sleep_zone is parented to the same prop
+    expect(item.templated).toBe(true);
+    expect(item.color).toBe('purple');
+    expect(notes.some((n) => n.includes('sleep_prop'))).toBe(true);
+    expect(notes.some((n) => n.includes('sleep_template'))).toBe(true);
+  });
+
+  it('takes a lone relay with its own Disable/Enable cooldown from the same template', () => {
+    const { item } = suggestItemForWeapon(byName('gravity_weapon'), graph);
+    expect(item.handlers.map((h) => h.hammerid)).toEqual(['2102']);
+    expect(item.handlers[0].event).toBe('OnTrigger');
+    expect(item.handlers[0].cooldown).toBe(45);
+  });
+
+  it('still explains itself when nothing is found', () => {
+    const lonely = { ...byName('gravity_weapon'), id: 999, hammerId: '9999', targetname: 'lonely', props: { classname: 'weapon_mac10', targetname: 'lonely', hammeruniqueid: '9999' }, source: { ...byName('gravity_weapon').source, templated: false, container: 'default_ents' } };
+    const g2 = new EntityGraph([...map.entities, lonely]);
+    const { item, notes } = suggestItemForWeapon(lonely, g2);
+    expect(item.handlers).toEqual([]);
+    expect(notes.some((n) => n.includes('I/O search'))).toBe(true);
+  });
+});

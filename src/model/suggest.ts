@@ -2,7 +2,7 @@ import type { EntityGraph } from './graph';
 import { friendlyName, type MapEntity } from './entity';
 import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entwatch';
 import { newHandler, newItem } from './entwatch';
-import { inferCooldown } from './cooldown';
+import { hasSelfCooldown, inferCooldown } from './cooldown';
 import { suggestEvents } from './events';
 
 /** Outputs entity classes are known to fire (used for the event picker). */
@@ -141,7 +141,7 @@ const COLOR_HINTS: [RegExp, string][] = [
   [/wind|air|tornado|storm|gale|speed|haste|jump/i, 'green'],
   [/electr|thunder|lightning|volt|shock|bolt/i, 'blue'],
   [/poison|bio|toxic|venom|plague/i, 'olive'],
-  [/gravity|void|dark|shadow|black|death|necro/i, 'purple'],
+  [/gravity|void|dark|shadow|black|death|necro|sleep|dream|stun|silence|confus/i, 'purple'],
   [/ultima|meteor|nuke|bomb|explo|rocket|missile/i, 'darkred'],
   [/barrier|shield|wall|protect|guard|armor/i, 'yellow'],
   [/time|slow|stop|clock|chrono/i, 'gray'],
@@ -176,10 +176,54 @@ export function suggestItemName(e: MapEntity): { name: string; shortname: string
   return { name, shortname };
 }
 
+const USE_CLASSES = new Set(['func_button', 'func_rot_button', 'momentary_rot_button', 'func_physbox', 'func_physbox_multiplayer', 'func_physical_button', 'game_ui', 'prop_physics', 'prop_physics_multiplayer', 'prop_physics_override']);
+const GATE_CLASSES = new Set(['logic_relay', 'logic_case', 'logic_branch', 'logic_compare', 'logic_timer']);
+const SKIP_CLASSES = new Set(['worldspawn', 'point_template', 'env_entity_maker', 'info_target', 'info_teleport_destination', 'prop_dynamic', 'prop_dynamic_override', 'prop_static', 'light', 'light_spot', 'light_omni', 'env_sprite', 'env_sprite_clientside', 'info_particle_system', 'env_soundscape', 'ambient_generic', 'func_brush', 'func_movelinear', 'func_door', 'func_door_rotating', 'func_tracktrain', 'path_track', 'phys_constraint', 'phys_hinge', 'point_clientcommand', 'point_servercommand', 'game_text', 'env_shake', 'env_fade', 'env_hudhint']);
+
+function isUse(e: MapEntity): boolean {
+  return USE_CLASSES.has(e.classname);
+}
+function isFilter(e: MapEntity): boolean {
+  return e.classname.startsWith('filter_');
+}
+function isGate(e: MapEntity): boolean {
+  return GATE_CLASSES.has(e.classname);
+}
+function isInteresting(e: MapEntity): boolean {
+  return isUse(e) || isFilter(e) || isGate(e) || e.classname === 'math_counter' || e.classname.startsWith('trigger_');
+}
+
+function origin(e: MapEntity): [number, number, number] | null {
+  const parts = (e.props.origin ?? '').split(/\s+/).map(Number);
+  return parts.length === 3 && parts.every((n) => Number.isFinite(n)) ? [parts[0], parts[1], parts[2]] : null;
+}
+
+function distance(a: MapEntity, b: MapEntity): number | null {
+  const oa = origin(a);
+  const ob = origin(b);
+  if (!oa || !ob) return null;
+  return Math.hypot(oa[0] - ob[0], oa[1] - ob[1], oa[2] - ob[2]);
+}
+
+interface Candidate {
+  entity: MapEntity;
+  why: string;
+  /** 1 direct, 2 sibling (parent / template / lump), 3 one hop from a use-entity or filter, 4 proximity fallback */
+  tier: number;
+}
+
 /**
- * Builds an item entry for a weapon entity and proposes handlers from directly related entities:
- * buttons/physboxes parented to the weapon, entities the weapon targets, and what those in turn
- * fire into (one hop), keeping the classic weapon -> button -> filter/relay/counter chains.
+ * Builds an item entry for a weapon entity and proposes handlers from related entities.
+ *
+ * Candidates come from, in order of confidence:
+ *   1. entities parented to the weapon, targets of its outputs, entities naming it (filtername),
+ *      triggers that Kill it;
+ *   2. siblings: children of the weapon's parent (weapon and button both parented to a prop),
+ *      members of the same point_template, entities compiled into the same template lump;
+ *   3. one hop from buttons / physboxes / game_ui / filters found so far;
+ *   4. if nothing usable turned up: entities of interest within 200 units of the weapon.
+ * Buttons are always taken; filters and relays only when something already included feeds them
+ * or when they carry their own cooldown (Disable then delayed Enable).
  */
 export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: ItemConfig; notes: string[] } {
   const notes: string[] = [];
@@ -191,57 +235,122 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     color: suggestColor(friendlyName(e.targetname)),
     templated: e.source.templated ? true : undefined,
   });
+  const label = (x: MapEntity) => friendlyName(x.targetname) || x.classname;
 
   const seen = new Set<number>([e.id]);
-  const candidates: { entity: MapEntity; why: string; depth: number }[] = [];
-  const consider = (other: MapEntity, why: string, depth: number) => {
-    if (seen.has(other.id)) return;
+  const candidates: Candidate[] = [];
+  const consider = (other: MapEntity, why: string, tier: number) => {
+    if (seen.has(other.id) || SKIP_CLASSES.has(other.classname) || other.classname.startsWith('weapon_')) return;
     seen.add(other.id);
-    candidates.push({ entity: other, why, depth });
+    candidates.push({ entity: other, why, tier });
   };
 
+  // ---- tier 1: direct relations -------------------------------------------------------------
   const PICKUP_OUTPUTS = new Set(['OnPlayerPickup', 'OnNPCPickup', 'OnCacheInteraction']);
   for (const rel of graph.relationsOf(e)) {
     if (rel.kind === 'child') consider(rel.other, `parented to weapon (${rel.label})`, 1);
     else if (rel.kind === 'output') {
-      // pickup notifications are not ability uses
       if (rel.connection && PICKUP_OUTPUTS.has(rel.connection.output)) continue;
       consider(rel.other, `weapon output ${rel.label}`, 1);
     } else if (rel.kind === 'keyref-in') consider(rel.other, `references weapon via ${rel.label}`, 1);
-    else if (rel.kind === 'input' && rel.other.classname.startsWith('trigger_')) {
-      // e.g. a strip trigger firing Kill on the weapon
-      consider(rel.other, `fires ${rel.label} on weapon`, 1);
-    }
+    else if (rel.kind === 'input' && rel.other.classname.startsWith('trigger_')) consider(rel.other, `fires ${rel.label} on weapon`, 1);
   }
-  // one more hop from buttons / physboxes
-  for (const c of [...candidates]) {
-    if (c.depth !== 1) continue;
-    const cls = c.entity.classname;
-    const isUse = cls === 'func_button' || cls === 'func_rot_button' || cls.startsWith('func_physbox') || cls === 'game_ui' || cls.startsWith('prop_physics');
-    if (!isUse) continue;
-    for (const rel of graph.relationsOf(c.entity)) {
-      if (rel.kind === 'output') consider(rel.other, `${friendlyName(c.entity.targetname) || cls} ${rel.label}`, 2);
-      if (rel.kind === 'child') consider(rel.other, `parented to ${friendlyName(c.entity.targetname) || cls}`, 2);
+
+  // ---- tier 2: siblings ----------------------------------------------------------------------
+  for (const rel of graph.relationsOf(e)) {
+    if (rel.kind !== 'parent') continue;
+    const parent = rel.other;
+    const sibs = graph.relationsOf(parent).filter((r) => r.kind === 'child' && r.other.id !== e.id);
+    if (sibs.length > 0) notes.push(`weapon is parented to ${label(parent)}; ${sibs.length} sibling(s) there`);
+    for (const r of sibs) consider(r.other, `parented to ${label(parent)} together with the weapon`, 2);
+  }
+  for (const rel of graph.relationsOf(e)) {
+    if (rel.kind !== 'template-in') continue;
+    const tpl = rel.other;
+    const members = graph.relationsOf(tpl).filter((r) => r.kind === 'template' && r.other.id !== e.id);
+    notes.push(`weapon is spawned by ${label(tpl)} with ${members.length} other template member(s)`);
+    for (const r of members) consider(r.other, `same point_template (${label(tpl)})`, 2);
+  }
+  if (e.source.templated) {
+    const lumpMates = graph.entities.filter((x) => x.id !== e.id && x.source.templated && x.source.container === e.source.container && x.source.file === e.source.file);
+    if (lumpMates.length > 0 && lumpMates.length <= 60) {
+      const interesting = lumpMates.filter(isInteresting);
+      notes.push(`template lump ${e.source.container}: ${lumpMates.length} entities (${interesting.map((x) => x.classname).join(', ') || 'nothing usable'})`);
+      for (const x of interesting) consider(x, `same template lump (${e.source.container})`, 2);
     }
   }
 
-  const triggers: string[] = [];
-  for (const c of candidates) {
-    const ent = c.entity;
-    const cls = ent.classname;
-    if (!ent.hammerId) continue;
-    if (cls.startsWith('trigger_')) {
-      if (c.depth === 1) {
-        triggers.push(ent.hammerId);
-        notes.push(`trigger ${friendlyName(ent.targetname) || cls}: ${c.why}`);
+  // ---- tier 3: one hop from use-entities and filters ------------------------------------------
+  for (const c of [...candidates]) {
+    if (c.tier > 2) continue;
+    if (isUse(c.entity)) {
+      for (const rel of graph.relationsOf(c.entity)) {
+        if (rel.kind === 'output') consider(rel.other, `${label(c.entity)} ${rel.label}`, 3);
+        if (rel.kind === 'child') consider(rel.other, `parented to ${label(c.entity)}`, 3);
       }
+    } else if (isFilter(c.entity)) {
+      for (const rel of graph.relationsOf(c.entity)) if (rel.kind === 'output') consider(rel.other, `${label(c.entity)} ${rel.label}`, 3);
+    }
+  }
+
+  // ---- tier 4: proximity fallback ------------------------------------------------------------
+  const usable = () => candidates.some((c) => isUse(c.entity) || isFilter(c.entity) || isGate(c.entity) || c.entity.classname === 'math_counter');
+  if (!usable() && origin(e)) {
+    const near = graph.entities
+      .filter((x) => x.id !== e.id && isInteresting(x) && (!e.source.templated || x.source.container === e.source.container))
+      .map((x) => ({ x, d: distance(e, x) }))
+      .filter((p): p is { x: MapEntity; d: number } => p.d !== null && p.d <= 200)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 12);
+    if (near.length > 0) notes.push(`nothing wired to the weapon; looked at ${near.length} entities within 200 units`);
+    for (const p of near) consider(p.x, `within ${Math.round(p.d)} units of the weapon`, 4);
+  }
+
+  // ---- selection -----------------------------------------------------------------------------
+  const included = new Set<number>();
+  const fedBy = (x: MapEntity, pred: (from: MapEntity) => boolean) =>
+    graph.incomingConnections(x).some(({ from }) => included.has(from.id) && pred(from)) ||
+    graph.relationsOf(x).some((r) => (r.kind === 'keyref' || r.kind === 'parent') && included.has(r.other.id) && pred(r.other));
+  const fedByIncluded = (x: MapEntity) => fedBy(x, () => true);
+  // a relay behind an already chosen filter/relay would just repeat that handler's event
+  const redundant = (x: MapEntity) => fedBy(x, (from) => isFilter(from) || isGate(from) || from.classname === 'math_counter');
+  const chosen: { c: Candidate; extra?: string }[] = [];
+  const skipped: string[] = [];
+  const byOrder = [...candidates].sort((a, b) => a.tier - b.tier);
+
+  for (const c of byOrder) if (isUse(c.entity) && c.entity.hammerId) { included.add(c.entity.id); chosen.push({ c }); }
+  for (const c of byOrder) {
+    if (!isFilter(c.entity) || !c.entity.hammerId || included.has(c.entity.id)) continue;
+    if (c.tier === 1 || fedByIncluded(c.entity)) { included.add(c.entity.id); chosen.push({ c }); }
+    else skipped.push(`${label(c.entity)} (filter, not fed by a button)`);
+  }
+  for (const c of byOrder) {
+    const x = c.entity;
+    if (!(isGate(x) || x.classname === 'math_counter') || !x.hammerId || included.has(x.id)) continue;
+    if (redundant(x)) {
+      skipped.push(`${label(x)} (${x.classname}, sits behind a handler that already reports the use)`);
       continue;
     }
-    const wantsHandler =
-      cls === 'func_button' || cls === 'func_rot_button' || cls === 'momentary_rot_button' || cls.startsWith('func_physbox') ||
-      cls === 'game_ui' || cls === 'math_counter' || cls.startsWith('filter_') || cls === 'logic_relay' || cls === 'logic_case' ||
-      cls === 'logic_branch' || cls === 'logic_compare' || cls === 'logic_timer' || cls.startsWith('prop_physics');
-    if (!wantsHandler) continue;
+    const fed = fedBy(x, isUse);
+    const selfCd = hasSelfCooldown(graph, x);
+    const gateCount = candidates.filter((o) => isGate(o.entity) || o.entity.classname === 'math_counter').length;
+    if (fed || selfCd || (c.tier <= 2 && gateCount <= 2)) {
+      included.add(x.id);
+      chosen.push({ c, extra: fed ? 'fed by a button/use entity' : selfCd ? 'has its own Disable/Enable cooldown' : 'only gate in the group' });
+    } else skipped.push(`${label(x)} (${x.classname}, not fed by the item and no cooldown pattern)`);
+  }
+
+  const triggers: string[] = [];
+  for (const c of byOrder) {
+    if (!c.entity.classname.startsWith('trigger_') || !c.entity.hammerId) continue;
+    if (c.tier <= 2 || fedByIncluded(c.entity)) {
+      triggers.push(c.entity.hammerId);
+      notes.push(`trigger ${label(c.entity)}: ${c.why}`);
+    }
+  }
+
+  for (const { c, extra } of chosen) {
+    const ent = c.entity;
     const s = suggestHandler(ent, graph);
     const h: HandlerConfig = newHandler({
       type: s.type,
@@ -253,11 +362,13 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       templated: ent.source.templated && !e.source.templated ? true : undefined,
     });
     item.handlers.push(h);
-    notes.push(`handler ${friendlyName(ent.targetname) || cls} (${s.type}${s.event ? ' ' + s.event : ''}): ${c.why}`);
+    notes.push(`handler ${label(ent)} (${s.type}${s.event ? ' ' + s.event : ''}): ${c.why}${extra ? '; ' + extra : ''}`);
     if (s.eventReason && s.event) notes.push(`event ${s.event}: ${s.eventReason}`);
     if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
   }
+  for (const sk of skipped) notes.push(`skipped ${sk}`);
   item.triggers = triggers;
+
   // When a filter / relay / counter handler follows the button, the button entry only needs to hook
   // +use (the GFL convention: {"type": "button", "hammerid": "..."}); messages come from the follow-up.
   const hasFollowUp = item.handlers.some((h) => h.type !== 'button');
@@ -272,6 +383,10 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       h.maxuses = 0;
     }
   }
-  if (item.handlers.length === 0) notes.push('No related button/filter/counter found; add handlers from the relation tree.');
+  if (item.handlers.length === 0) {
+    notes.push(candidates.length === 0
+      ? 'Nothing is wired to or grouped with this weapon (no parent, no template, no outputs). Use the I/O search (e.g. "in:unlock") to find the ability entities and add them with "+".'
+      : 'No button/filter/relay/counter qualified; see the skipped entries above and add handlers from the tree or the I/O search.');
+  }
   return { item, notes };
 }

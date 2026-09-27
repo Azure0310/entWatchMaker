@@ -43,6 +43,11 @@ function reenableDelays(graph: EntityGraph, e: MapEntity): CooldownGuess[] {
   return out;
 }
 
+/** True when `e` itself is disabled/locked and re-enabled after a delay (a cooldown gate). */
+export function hasSelfCooldown(graph: EntityGraph, e: MapEntity): boolean {
+  return reenableDelays(graph, e).length > 0 && hasDisable(graph, e);
+}
+
 /** True when something also disables/locks `e` (so the re-enable really is a cooldown). */
 function hasDisable(graph: EntityGraph, e: MapEntity): boolean {
   for (const { connection } of graph.incomingConnections(e)) if (DISABLE_INPUTS.has(connection.input.toLowerCase())) return true;
