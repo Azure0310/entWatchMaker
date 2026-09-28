@@ -177,11 +177,34 @@ export function suggestItemName(e: MapEntity): { name: string; shortname: string
 }
 
 const USE_CLASSES = new Set(['func_button', 'func_rot_button', 'momentary_rot_button', 'func_physbox', 'func_physbox_multiplayer', 'func_physical_button', 'game_ui', 'prop_physics', 'prop_physics_multiplayer', 'prop_physics_override']);
+/** The only trigger classes CS2Fixes hooks for the "triggers" list (eban touch block). */
+export const HOOKABLE_TRIGGERS = new Set(['trigger_teleport', 'trigger_multiple', 'trigger_once']);
+const ENABLE_INPUTS = new Set(['enable', 'unlock', 'open', 'turnon', 'start']);
 const GATE_CLASSES = new Set(['logic_relay', 'logic_case', 'logic_branch', 'logic_compare', 'logic_timer']);
 const SKIP_CLASSES = new Set(['worldspawn', 'point_template', 'env_entity_maker', 'info_target', 'info_teleport_destination', 'prop_dynamic', 'prop_dynamic_override', 'prop_static', 'light', 'light_spot', 'light_omni', 'env_sprite', 'env_sprite_clientside', 'info_particle_system', 'env_soundscape', 'ambient_generic', 'func_brush', 'func_movelinear', 'func_door', 'func_door_rotating', 'func_tracktrain', 'path_track', 'phys_constraint', 'phys_hinge', 'point_clientcommand', 'point_servercommand', 'game_text', 'env_shake', 'env_fade', 'env_hudhint']);
 
 function isUse(e: MapEntity): boolean {
   return USE_CLASSES.has(e.classname);
+}
+/** Buttons and touch triggers alike can start an item's chain. */
+function isUseLike(e: MapEntity): boolean {
+  return USE_CLASSES.has(e.classname) || HOOKABLE_TRIGGERS.has(e.classname);
+}
+
+/**
+ * True when the trigger is one a holder touches to fire the item (its outputs feed the item's
+ * handlers / cooldown chain) rather than an effect zone the item switches on. Listing an effect
+ * zone in "triggers" would make ebanned players immune to it, so those are rejected.
+ */
+export function isActivationTrigger(graph: EntityGraph, trig: MapEntity, chain: Set<number>): { ok: boolean; reason: string } {
+  if (!HOOKABLE_TRIGGERS.has(trig.classname)) return { ok: false, reason: `${trig.classname} is not hooked by CS2Fixes (only trigger_teleport/multiple/once)` };
+  const switchedOn = graph.incomingConnections(trig).some(({ from, connection }) => chain.has(from.id) && ENABLE_INPUTS.has(connection.input.toLowerCase()));
+  const feedsChain = graph.relationsOf(trig).some((r) => r.kind === 'output' && chain.has(r.other.id));
+  const cooldownChain = suggestEvents(graph, trig).some((g) => g.reason.includes('cooldown chain'));
+  if (switchedOn && !feedsChain) return { ok: false, reason: 'effect zone switched on by the item; listing it would make ebanned players immune to it' };
+  if (feedsChain) return { ok: true, reason: 'touching it fires the item handlers' };
+  if (cooldownChain) return { ok: true, reason: 'touching it starts a cooldown chain' };
+  return { ok: false, reason: 'does not fire the item (nothing it outputs reaches a handler)' };
 }
 function isFilter(e: MapEntity): boolean {
   return e.classname.startsWith('filter_');
@@ -233,7 +256,8 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     shortname,
     hammerid: e.hammerId,
     color: suggestColor(friendlyName(e.targetname)),
-    templated: e.source.templated ? true : undefined,
+    // left to CS2Fixes' auto detection (name suffix); nothing to gain from writing it
+    templated: undefined,
   });
   const label = (x: MapEntity) => friendlyName(x.targetname) || x.classname;
 
@@ -319,6 +343,9 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   const byOrder = [...candidates].sort((a, b) => a.tier - b.tier);
 
   for (const c of byOrder) if (isUse(c.entity) && c.entity.hammerId) { included.add(c.entity.id); chosen.push({ c }); }
+  // touch triggers that start the chain count as feeders (they are confirmed as activation triggers below)
+  const touchFeeders = byOrder.filter((c) => HOOKABLE_TRIGGERS.has(c.entity.classname) && c.entity.connections.some((k) => /^on(start)?touch|^ontrigger/i.test(k.output)));
+  for (const c of touchFeeders) included.add(c.entity.id);
   for (const c of byOrder) {
     if (!isFilter(c.entity) || !c.entity.hammerId || included.has(c.entity.id)) continue;
     if (c.tier === 1 || fedByIncluded(c.entity)) { included.add(c.entity.id); chosen.push({ c }); }
@@ -331,21 +358,26 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       skipped.push(`${label(x)} (${x.classname}, sits behind a handler that already reports the use)`);
       continue;
     }
-    const fed = fedBy(x, isUse);
+    const fed = fedBy(x, isUseLike);
     const selfCd = hasSelfCooldown(graph, x);
     const gateCount = candidates.filter((o) => isGate(o.entity) || o.entity.classname === 'math_counter').length;
     if (fed || selfCd || (c.tier <= 2 && gateCount <= 2)) {
       included.add(x.id);
-      chosen.push({ c, extra: fed ? 'fed by a button/use entity' : selfCd ? 'has its own Disable/Enable cooldown' : 'only gate in the group' });
+      chosen.push({ c, extra: fed ? 'fed by a button/trigger' : selfCd ? 'has its own Disable/Enable cooldown' : 'only gate in the group' });
     } else skipped.push(`${label(x)} (${x.classname}, not fed by the item and no cooldown pattern)`);
   }
 
   const triggers: string[] = [];
+  const chainIds = new Set<number>([e.id, ...chosen.map(({ c }) => c.entity.id)]);
   for (const c of byOrder) {
     if (!c.entity.classname.startsWith('trigger_') || !c.entity.hammerId) continue;
-    if (c.tier <= 2 || fedByIncluded(c.entity)) {
+    const verdict = isActivationTrigger(graph, c.entity, chainIds);
+    if (verdict.ok) {
       triggers.push(c.entity.hammerId);
-      notes.push(`trigger ${label(c.entity)}: ${c.why}`);
+      notes.push(`trigger ${label(c.entity)}: ${c.why}; ${verdict.reason}`);
+    } else {
+      included.delete(c.entity.id);
+      skipped.push(`trigger ${label(c.entity)} (${verdict.reason})`);
     }
   }
 
@@ -359,10 +391,13 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       mode: s.mode,
       cooldown: s.cooldown ?? 0,
       maxuses: 0,
-      templated: ent.source.templated && !e.source.templated ? true : undefined,
+      // CS2Fixes auto-detects templated entities from the _N name suffix; the only value worth
+      // writing is "false" for a shared (non-templated) handler of a templated weapon
+      templated: e.source.templated && !ent.source.templated ? false : undefined,
     });
     item.handlers.push(h);
     notes.push(`handler ${label(ent)} (${s.type}${s.event ? ' ' + s.event : ''}): ${c.why}${extra ? '; ' + extra : ''}`);
+    if (h.templated === false) notes.push(`templated=false: the weapon is spawned by a template but ${label(ent)} is a single map entity`);
     if (s.eventReason && s.event) notes.push(`event ${s.event}: ${s.eventReason}`);
     if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
   }
