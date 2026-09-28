@@ -68,6 +68,12 @@ export function buildDemoMap(): ParsedMap {
     mk('point_template', 'gravity_template', '2100', { entitylumpname: 'demo_template_3', template01: 'gravity_weapon', template02: 'gravity_relay' }),
     mk('weapon_mac10', 'gravity_weapon', '2101', { origin: '900 900 0' }, [], true),
     mk('logic_relay', 'gravity_relay', '2102', { origin: '910 900 0' }, [c('OnTrigger', '!self', 'Disable'), c('OnTrigger', '!self', 'Enable', '', 45), c('OnTrigger', '!activator', 'AddOutput', 'gravity 0.2')], true),
+    // Push materia: fired by touching a trigger parented to the weapon (activation trigger), the relay
+    // carries the cooldown; the push zone it switches on is an effect zone and must not be listed.
+    mk('weapon_awp', 'push_weapon', '2200', { origin: '-900 900 0' }),
+    mk('trigger_multiple', 'push_trigger', '2201', { parentname: 'push_weapon', wait: '1', spawnflags: '1' }, [c('OnStartTouch', 'push_relay', 'Trigger')]),
+    mk('logic_relay', 'push_relay', '2202', {}, [c('OnTrigger', '!self', 'Disable'), c('OnTrigger', '!self', 'Enable', '', 30), c('OnTrigger', 'push_zone', 'Enable'), c('OnTrigger', 'push_zone', 'Disable', '', 3)]),
+    mk('trigger_multiple', 'push_zone', '2203', { startdisabled: '1', parentname: 'push_weapon' }, [c('OnStartTouch', '!activator', 'AddOutput', 'basevelocity 0 0 400')]),
     // Unrelated stuff
     mk('logic_auto', 'map_auto', '1500', {}, [c('OnMultiNewRound', 'round_relay', 'Trigger')]),
     mk('logic_relay', 'round_relay', '1501', {}, [c('OnTrigger', 'ice_template', 'ForceSpawn')]),

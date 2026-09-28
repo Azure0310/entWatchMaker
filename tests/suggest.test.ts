@@ -46,13 +46,13 @@ describe('graph + suggestions on the demo map', () => {
     // the relay behind the filter and the pickup relay are not ability handlers
     expect(byId.has('1204')).toBe(false);
     expect(byId.has('1205')).toBe(false);
-    expect(item.triggers).toContain('1207');
-    expect(item.triggers).toContain('1209');
+    // trigger_hurt is not hooked by CS2Fixes and the strip trigger does not fire the item
+    expect(item.triggers).toEqual([]);
   });
 
-  it('suggests counter handlers for templated items and marks them templated', () => {
+  it('suggests counter handlers for templated items without spelling out templated', () => {
     const { item } = suggestItemForWeapon(ice, graph);
-    expect(item.templated).toBe(true);
+    expect(item.templated).toBeUndefined();
     const counter = item.handlers.find((h) => h.hammerid === '1303');
     expect(counter?.type).toBe('counterdown');
     expect(counter?.mode).toBe(5);
@@ -139,8 +139,10 @@ describe('template style items without name references', () => {
     const button = item.handlers.find((h) => h.hammerid === '2003')!;
     expect(button.type).toBe('button');
     expect(button.event).toBeUndefined(); // plain +use hook
-    expect(item.triggers).toContain('2005'); // sleep_zone is parented to the same prop
-    expect(item.templated).toBe(true);
+    // sleep_zone is an effect zone switched on by the relay: never a "triggers" entry
+    expect(item.triggers).toEqual([]);
+    expect(notes.some((n) => n.includes('sleep_zone') && n.includes('effect zone'))).toBe(true);
+    expect(item.templated).toBeUndefined(); // CS2Fixes auto-detects it from the name suffix
     expect(item.color).toBe('purple');
     expect(notes.some((n) => n.includes('sleep_prop'))).toBe(true);
     expect(notes.some((n) => n.includes('sleep_template'))).toBe(true);
@@ -159,5 +161,40 @@ describe('template style items without name references', () => {
     const { item, notes } = suggestItemForWeapon(lonely, g2);
     expect(item.handlers).toEqual([]);
     expect(notes.some((n) => n.includes('I/O search'))).toBe(true);
+  });
+});
+
+
+describe('activation triggers vs effect zones', () => {
+  const map = buildDemoMap();
+  const graph = new EntityGraph(map.entities);
+  const byName = (n: string) => map.entities.find((e) => e.targetname === n)!;
+
+  it('lists the trigger the holder touches to fire the item, not the zone it switches on', () => {
+    const { item, notes } = suggestItemForWeapon(byName('push_weapon'), graph);
+    expect(item.triggers).toEqual(['2201']);
+    expect(item.handlers.map((h) => h.hammerid)).toEqual(['2202']);
+    expect(item.handlers[0].event).toBe('OnTrigger');
+    expect(item.handlers[0].cooldown).toBe(30);
+    expect(notes.some((n) => n.includes('push_zone') && n.includes('effect zone'))).toBe(true);
+  });
+
+  it('writes templated=false only for a shared handler of a templated weapon', () => {
+    const sleep = byName('sleep_weapon');
+    const sharedButton = { ...byName('sleep_button'), id: 950, hammerId: '9500', source: { ...byName('sleep_button').source, templated: false, container: 'default_ents' } };
+    const g2 = new EntityGraph([...map.entities, sharedButton]);
+    const { item } = suggestItemForWeapon(sleep, g2);
+    const h = item.handlers.find((x) => x.hammerid === '9500');
+    expect(h?.templated).toBe(false);
+    expect(item.handlers.find((x) => x.hammerid === '2003')?.templated).toBeUndefined();
+  });
+
+  it('warns about non-hookable classes and effect zones in the triggers list', () => {
+    const { item } = suggestItemForWeapon(byName('push_weapon'), graph);
+    item.triggers = ['2201', '2203', '1207'];
+    const issues = validateConfig({ items: [item] }, graph);
+    expect(issues.some((i) => i.key === 'v.triggerEffectZone' && i.detail?.startsWith('2203'))).toBe(true);
+    expect(issues.some((i) => i.key === 'v.triggerNotHookable' && i.detail?.startsWith('1207'))).toBe(true);
+    expect(issues.some((i) => i.detail?.startsWith('2201'))).toBe(false);
   });
 });

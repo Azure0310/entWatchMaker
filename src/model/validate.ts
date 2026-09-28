@@ -2,6 +2,7 @@ import type { EntityGraph } from './graph';
 import type { EntWatchConfig } from './entwatch';
 import { outputChoices } from './suggest';
 import { hintMatches, type HintMap } from './remap';
+import { HOOKABLE_TRIGGERS } from './suggest';
 
 export interface ValidationIssue {
   level: 'error' | 'warning' | 'info';
@@ -44,8 +45,21 @@ export function validateConfig(config: EntWatchConfig, graph: EntityGraph | null
     for (const t of item.triggers) {
       if (!graph) continue;
       const ents = graph.byHammerId.get(t) ?? [];
-      if (ents.length === 0) issues.push({ level: 'error', itemUid: item.uid, key: 'v.triggerNotInMap', detail: t });
-      else if (!ents.some((e) => e.classname.startsWith('trigger_'))) issues.push({ level: 'warning', itemUid: item.uid, key: 'v.triggerNotTrigger', detail: `${t} ${ents[0].classname}` });
+      if (ents.length === 0) {
+        issues.push({ level: 'error', itemUid: item.uid, key: 'v.triggerNotInMap', detail: t });
+        continue;
+      }
+      const trig = ents[0];
+      if (!HOOKABLE_TRIGGERS.has(trig.classname)) {
+        issues.push({ level: 'warning', itemUid: item.uid, key: 'v.triggerNotHookable', detail: `${t} ${trig.classname}` });
+        continue;
+      }
+      // switched on by one of this item's handlers and firing nothing back: an effect zone
+      const handlerIds = new Set(item.handlers.map((h) => h.hammerid).concat(item.hammerid));
+      const fromItem = (e: { hammerId: string }) => handlerIds.has(e.hammerId);
+      const switchedOn = graph.incomingConnections(trig).some(({ from, connection }) => fromItem(from) && ['enable', 'unlock', 'open', 'turnon', 'start'].includes(connection.input.toLowerCase()));
+      const feedsItem = graph.relationsOf(trig).some((r) => r.kind === 'output' && fromItem(r.other));
+      if (switchedOn && !feedsItem) issues.push({ level: 'warning', itemUid: item.uid, key: 'v.triggerEffectZone', detail: `${t} ${trig.targetname || trig.classname}` });
     }
     for (const h of item.handlers) {
       if (!h.hammerid) {

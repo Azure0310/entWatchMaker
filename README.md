@@ -45,7 +45,7 @@ English summary is at the bottom.
    - ローカルで `npm install --legacy-peer-deps && npm run dev` して開く。
 2. `.vmap` または `.vpk` をドロップします（初めてなら「サンプルマップを読み込む」で UI を試せます）。
 3. 左の `weapon_` を選び、中央のツリーで配線を確認しながら「アイテムとして追加」。
-4. 右側でハンドラの `event` / `mode` / `cooldown` などを調整します。
+4. 右側でハンドラの `event` / `mode` / `cooldown` などを調整します。間違えて追加したアイテムは、一覧の行末 ✕ か編集欄上部の「このアイテムを削除」で消せます（ハンドラは枠右上の ✕、トリガーはチップの ✕、全部やり直すなら「すべて削除」）。
 5. 右下の「ダウンロード」で `<マップ名>.jsonc` を保存し、サーバーの
    `game/csgo/addons/cs2fixes/configs/entwatch/maps/` に置きます。
 
@@ -73,6 +73,9 @@ English summary is at the bottom.
 - `type`: `button`（+use をフック）/ `counterup` / `counterdown`（`math_counter`、`OutValue` を追跡）/ それ以外は `event` で指定した出力を監視。
 - `mode`: `1` なし / `2` Cooldown / `3` MaxUses / `4` CooldownAfterUses / `5` CounterValue。
 - `hammerid` は必ず文字列です（CS2Fixes が文字列として読み込みます）。
+- `triggers`: **eban 中のプレイヤーに触らせないトリガー** の一覧です（CS2Fixes は `trigger_teleport` / `trigger_multiple` / `trigger_once` の Touch をフックし、eban 者の接触だけを無効化します）。
+  ホルダーが触れてアイテムを発動するトリガーだけを入れてください。押し返しや heal などの **効果ゾーンを入れると eban 中のプレイヤーがその効果を受けなくなります**。ツールは発動用トリガーだけを候補にし、効果ゾーンや対象外クラスは検証で警告します。
+- `templated`: 同じテンプレートから複数スポーンしたアイテムで、武器とハンドラの `_N` 接尾辞を突き合わせるためのフラグです。通常は自動判定で足ります。書く意味があるのは「武器はテンプレート生成だがハンドラはマップに 1 つだけ」のときにハンドラ側へ `false` を付ける場合で、ツールはその場合だけ出力します。
 
 ## 推定ロジックと、GFL 設定 211 件から見た傾向
 

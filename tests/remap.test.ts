@@ -32,7 +32,9 @@ describe('hammerid remapping across map versions', () => {
     expect(r.changes.length).toBeGreaterThan(5);
     expect(r.config.items[0].hammerid).toBe('6201');
     expect(r.config.items[0].handlers.map((h) => h.hammerid)).toContain('6202');
-    expect(r.config.items[0].triggers).toContain('6207');
+    const push = r.config.items.find((i) => i.hammerid === '7200')!;
+    expect(push.triggers).toEqual(['7201']);
+    expect(push.handlers.map((h) => h.hammerid)).toEqual(['7202']);
   });
 
   it('re-resolves from the comments in an exported jsonc', () => {
@@ -44,12 +46,12 @@ describe('hammerid remapping across map versions', () => {
     });
     const hints = hintsFromJsonc(text);
     expect(hints.get('1201')).toEqual({ classname: 'weapon_knife', targetname: 'fire_weapon' });
-    expect(hints.get('1207')).toEqual({ classname: 'trigger_hurt', targetname: 'fire_hurt' });
+    expect(hints.get('2201')).toEqual({ classname: 'trigger_multiple', targetname: 'push_trigger' });
     expect(hints.get('1303')?.classname).toBe('math_counter');
     const g2 = new EntityGraph(bumpedMap(100).entities);
     const r = remapConfig(config, g2, hints);
     expect(r.unresolved).toEqual([]);
-    expect(r.config.items.map((i) => i.hammerid)).toEqual(['1301', '1401', '1500', '2102', '2201']);
+    expect(r.config.items.map((i) => i.hammerid)).toEqual(['1301', '1401', '1500', '2102', '2201', '2300']);
   });
 
   it('anchors unnamed entities to the item weapon and reports ambiguity', () => {
