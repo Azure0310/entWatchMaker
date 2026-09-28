@@ -20,6 +20,7 @@ import { friendlyName, type MapEntity, type ParsedMap } from '../src/model/entit
 import { parseEntWatchConfig, type HandlerConfig, type ItemConfig } from '../src/model/entwatch';
 import { suggestItemForWeapon } from '../src/model/suggest';
 import { isKnife } from '../src/model/triggers';
+import { isHousekeepingInput } from '../src/model/roles';
 
 const args = process.argv.slice(2);
 const outIndex = args.indexOf('--out');
@@ -124,6 +125,125 @@ interface ItemResult {
   structural: boolean;
   exact: boolean;
   item: { name: boolean; color: boolean; transfer: boolean };
+  /** What would differ in game (CS2Fixes) from the GFL config; empty = usable as is. */
+  inGame: string[];
+}
+
+// ---- in-game equivalence --------------------------------------------------------------------------
+/** `a` fires `b` through non-housekeeping inputs, directly or through one entity in between. */
+function fires(graph: EntityGraph, a: MapEntity, b: MapEntity, hops = 2): boolean {
+  let frontier = [a];
+  const seen = new Set([a.id]);
+  for (let d = 0; d < hops; d++) {
+    const next: MapEntity[] = [];
+    for (const x of frontier) {
+      for (const c of x.connections) {
+        if (isHousekeepingInput(c.input)) continue;
+        for (const t of graph.connectionTargets(x, c)) {
+          if (t.id === b.id) return true;
+          if (!seen.has(t.id)) {
+            seen.add(t.id);
+            next.push(t);
+          }
+        }
+      }
+    }
+    frontier = next;
+  }
+  return false;
+}
+
+const isCounterType = (h: HandlerConfig) => h.type === 'counterup' || h.type === 'counterdown';
+/** CS2Fixes prints a use in chat when `message` is on, except for a counter in mode 5 (it only shows the value). */
+const announces = (h: HandlerConfig) => h.message && !(isCounterType(h) && h.mode === 5);
+/**
+ * The cooldown CS2Fixes shows / waits for in the handler's mode. Up to 2 s it makes no difference
+ * in game: the 1 s leeway lets every use message through and the HUD barely shows it.
+ */
+const shownCooldown = (h: HandlerConfig) => {
+  const cd = [2, 3, 4].includes(h.mode) ? (h.cooldown ?? 0) : 0;
+  return cd <= 2 ? 0 : cd;
+};
+
+/**
+ * What would behave differently in CS2Fixes than the GFL config. Choices that only differ in
+ * style are accepted: a plain +use hook plus the handler it fires counts like the button counted
+ * on its own, and a filter handing the use on like the gate behind it (either way round). Checked:
+ *   - every button GFL hooks is hooked (CS2Fixes blocks the +use of other players on them)
+ *   - every GFL handler has a counterpart that fires on the same use; no other handlers (extra
+ *     chat messages / HUD entries, or a map button only the holder could press)
+ *   - uses GFL announces / shows on the HUD are announced / shown
+ *   - the cooldown within 1 s (CS2Fixes' own leeway for use messages) and the same max uses, as far
+ *     as the mode uses them (a counter's uses come from its min / max)
+ *   - the same triggers (ebanned players cannot touch them)
+ * Returns "kind: hammerid" strings.
+ */
+function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig): string[] {
+  const problems: string[] = [];
+  const get = (id: string) => graph.byHammerId.get(id)?.[0];
+  /** Uses shown on the HUD: a counter's range, or maxuses in mode 3 / 4. */
+  const shownUses = (h: HandlerConfig) => {
+    if (isCounterType(h)) {
+      const e = get(h.hammerid);
+      const range = e ? parseFloat(e.props.max ?? '0') - parseFloat(e.props.min ?? '0') : NaN;
+      return Number.isFinite(range) ? Math.round(range) : -1;
+    }
+    return [3, 4].includes(h.mode) ? (h.maxuses ?? 0) : 0;
+  };
+  const gIds = new Set(cfg.handlers.map((h) => h.hammerid));
+  const used = new Set<string>();
+  const pairs: [HandlerConfig, HandlerConfig][] = [];
+  for (const h of cfg.handlers) {
+    let t = tool.handlers.find((x) => x.hammerid === h.hammerid && !used.has(x.hammerid));
+    if (!t) {
+      const he = get(h.hammerid);
+      t = tool.handlers.find((x) => {
+        if (used.has(x.hammerid) || gIds.has(x.hammerid)) return false;
+        const xe = get(x.hammerid);
+        return !!he && !!xe && (fires(graph, he, xe) || fires(graph, xe, he));
+      });
+    }
+    if (!t) {
+      problems.push(`GFL handler has no counterpart: ${h.hammerid}`);
+      continue;
+    }
+    used.add(t.hammerid);
+    pairs.push([h, t]);
+  }
+  // the follow-up of a plain +use hook reports the use the GFL button handler reports
+  const followUps = tool.handlers.filter((x) => {
+    if (used.has(x.hammerid)) return false;
+    const xe = get(x.hammerid);
+    return pairs.some(([, t]) => {
+      const te = get(t.hammerid);
+      return t.type === 'button' && t.mode <= 1 && !!te && !!xe && fires(graph, te, xe);
+    });
+  });
+  for (const x of tool.handlers) if (!used.has(x.hammerid) && !followUps.includes(x)) problems.push(`extra handler: ${x.hammerid}`);
+  for (const h of cfg.handlers) {
+    if (h.type === 'button' && !tool.handlers.some((x) => x.hammerid === h.hammerid && x.type === 'button')) problems.push(`button not hooked: ${h.hammerid}`);
+  }
+  for (const [h, t] of pairs) {
+    // a plain +use hook leaves the message / HUD / numbers to the handlers its press fires
+    const plain = t.type === 'button' && t.mode <= 1;
+    const te = get(t.hammerid);
+    const firedByT = plain && te ? tool.handlers.filter((x) => x !== t && get(x.hammerid) && fires(graph, te, get(x.hammerid)!)) : [];
+    const carrier = plain && (h.mode > 1 || h.message || h.ui) ? (firedByT.find((x) => followUps.includes(x)) ?? firedByT[0] ?? t) : t;
+    if (announces(h) && !announces(t) && !firedByT.some(announces)) problems.push(`use not announced: ${h.hammerid}`);
+    if (h.ui && !t.ui && !firedByT.some((x) => x.ui)) problems.push(`not shown on the HUD: ${h.hammerid}`);
+    const counters = isCounterType(h) && isCounterType(carrier);
+    if (!counters && h.hammerid === carrier.hammerid && h.event && carrier.event && h.event.toLowerCase() !== carrier.event.toLowerCase()) problems.push(`event: ${h.hammerid}`);
+    const gc = shownCooldown(h);
+    const tc = shownCooldown(carrier);
+    if (Math.abs(gc - tc) > 1) problems.push(`${gc === 0 ? 'cooldown not in GFL' : tc === 0 ? 'cooldown missing' : 'cooldown differs'}: ${h.hammerid}`);
+    const gu = shownUses(h);
+    const tu = shownUses(carrier);
+    if (gu !== tu) problems.push(`${gu === 0 ? 'max uses not in GFL' : tu === 0 ? 'max uses missing' : 'max uses differ'}: ${h.hammerid}`);
+  }
+  const t = compareSets(cfg.triggers, tool.triggers);
+  if (t.missed.length > 0) problems.push(`trigger missed: ${t.missed.join(' ')}`);
+  if (t.extra.length > 0) problems.push(`extra trigger: ${t.extra.join(' ')}`);
+  return problems;
 }
 interface MapResult {
   folder: string;
@@ -147,7 +267,7 @@ function evaluateItem(graph: EntityGraph, cfg: ItemConfig): ItemResult {
   const weapon: MapEntity | undefined = list.find((e) => e.classname.startsWith('weapon_')) ?? list[0];
   const empty = Object.fromEntries(FIELDS.map((f) => [f, { same: 0, total: 0 }])) as ItemResult['fieldChecks'];
   if (!weapon) {
-    return { name: cfg.name, hammerid: cfg.hammerid, weapon: null, handlers: compareSets(cfg.handlers.map((h) => h.hammerid), []), triggers: compareSets(cfg.triggers, []), fieldDiffs: [], fieldChecks: empty, structural: false, exact: false, item: { name: false, color: false, transfer: false } };
+    return { name: cfg.name, hammerid: cfg.hammerid, weapon: null, handlers: compareSets(cfg.handlers.map((h) => h.hammerid), []), triggers: compareSets(cfg.triggers, []), fieldDiffs: [], fieldChecks: empty, structural: false, exact: false, item: { name: false, color: false, transfer: false }, inGame: ['weapon not in the map'] };
   }
   const tool = suggestItemForWeapon(weapon, graph).item;
   const handlers = compareSets(cfg.handlers.map((h) => h.hammerid), tool.handlers.map((h) => h.hammerid));
@@ -181,6 +301,7 @@ function evaluateItem(graph: EntityGraph, cfg: ItemConfig): ItemResult {
       // unset transfer means CS2Fixes' default: off for knives
       transfer: (cfg.transfer ?? !knife) === (tool.transfer ?? !knife),
     },
+    inGame: inGameProblems(graph, cfg, tool),
   };
 }
 
@@ -230,9 +351,10 @@ function evaluateMap(folder: string, map: ParsedMap, loaderPick: string | undefi
 
   details.push(`## ${map.mapName} (${path.basename(folder)})`);
   for (const it of items) {
-    if (it.exact) continue;
-    details.push(`- **${it.name}** #${it.hammerid} ${it.weapon ?? '(weapon NOT FOUND)'}`);
+    if (it.exact && it.inGame.length === 0) continue;
+    details.push(`- **${it.name}** #${it.hammerid} ${it.weapon ?? '(weapon NOT FOUND)'}${it.inGame.length === 0 ? ' — behaves the same in game' : ''}`);
     if (!it.weapon) continue;
+    if (it.inGame.length > 0) details.push(`  - in game: ${it.inGame.join('; ')}`);
     for (const h of it.handlers.missed) details.push(`  - handler missed: ${describe(graph, h)}`);
     for (const h of it.handlers.extra) details.push(`  - handler extra: ${describe(graph, h)}`);
     for (const t of it.triggers.missed) details.push(`  - trigger missed: ${describe(graph, t)}`);
@@ -264,9 +386,13 @@ interface Totals {
   color: number;
   transfer: number;
   extraWeapons: number;
+  inGame: number;
+  /** Items per kind of in-game difference ("cooldown missing: 123" -> "cooldown missing"). */
+  problems: Map<string, number>;
 }
+const problemKind = (p: string) => p.split(':')[0].trim();
 function totals(rs: MapResult[]): Totals {
-  const t: Totals = { maps: rs.length, items: 0, found: 0, exact: 0, structural: 0, hG: 0, hT: 0, hM: 0, tG: 0, tT: 0, tM: 0, fields: Object.fromEntries(FIELDS.map((f) => [f, { same: 0, total: 0 }])) as Totals['fields'], name: 0, color: 0, transfer: 0, extraWeapons: 0 };
+  const t: Totals = { maps: rs.length, items: 0, found: 0, exact: 0, structural: 0, hG: 0, hT: 0, hM: 0, tG: 0, tT: 0, tM: 0, fields: Object.fromEntries(FIELDS.map((f) => [f, { same: 0, total: 0 }])) as Totals['fields'], name: 0, color: 0, transfer: 0, extraWeapons: 0, inGame: 0, problems: new Map() };
   for (const r of rs) {
     t.extraWeapons += r.extraWeapons;
     for (const it of r.items) {
@@ -275,6 +401,8 @@ function totals(rs: MapResult[]): Totals {
       t.found++;
       if (it.exact) t.exact++;
       if (it.structural) t.structural++;
+      if (it.inGame.length === 0) t.inGame++;
+      for (const k of new Set(it.inGame.map(problemKind))) t.problems.set(k, (t.problems.get(k) ?? 0) + 1);
       t.hG += it.handlers.gfl.length;
       t.hT += it.handlers.tool.length;
       t.hM += it.handlers.matched.length;
@@ -307,6 +435,7 @@ out.push('| metric | all maps | maps with ≥ 90% ids found |');
 out.push('| --- | --- | --- |');
 const row = (label: string, f: (t: Totals) => string) => out.push(`| ${label} | ${f(all)} | ${f(ok)} |`);
 row('items (weapon found / config items)', (t) => frac(t.found, t.items));
+row('**items that behave like the config in game** (CS2Fixes; style differences allowed, cooldown ±1 s)', (t) => frac(t.inGame, t.found));
 row('items identical (handlers, triggers, type/event/mode/cooldown/maxuses)', (t) => frac(t.exact, t.found));
 row('items with the same handler and trigger ids', (t) => frac(t.structural, t.found));
 row('handler recall (config handlers the tool proposes)', (t) => frac(t.hM, t.hG));
@@ -319,13 +448,20 @@ row('item color identical', (t) => frac(t.color, t.found));
 row('item transfer identical (unset = off for knives)', (t) => frac(t.transfer, t.found));
 row('weapons not in the config (tool would add an item)', (t) => String(t.extraWeapons));
 out.push('');
+out.push('## What differs in game');
+out.push('Items per kind of difference (an item can have several).');
+out.push('');
+out.push('| difference | items (all maps) | items (≥ 90% ids found) |');
+out.push('| --- | --- | --- |');
+for (const [k, n] of [...all.problems.entries()].sort((a, b) => b[1] - a[1])) out.push(`| ${k} | ${n} | ${ok.problems.get(k) ?? 0} |`);
+out.push('');
 out.push('## Per map');
-out.push('| map | folder | ids found | items exact | same ids | handlers recall | handlers precision | triggers recall | triggers precision | same event / mode / cooldown / maxuses |');
-out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+out.push('| map | folder | ids found | in game | items exact | same ids | handlers recall | handlers precision | triggers recall | triggers precision | same event / mode / cooldown / maxuses |');
+out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
 for (const r of [...results].sort((a, b) => a.mapName.localeCompare(b.mapName))) {
   const t = totals([r]);
   const fv = (f: Field) => pct(t.fields[f].same, t.fields[f].total);
-  out.push(`| ${r.mapName} | ${path.basename(r.folder)} | ${pct(r.foundRatio, 1)} | ${t.exact}/${t.found} | ${t.structural}/${t.found} | ${frac(t.hM, t.hG)} | ${frac(t.hM, t.hT)} | ${frac(t.tM, t.tG)} | ${frac(t.tM, t.tT)} | ${fv('event')} / ${fv('mode')} / ${fv('cooldown')} / ${fv('maxuses')} |`);
+  out.push(`| ${r.mapName} | ${path.basename(r.folder)} | ${pct(r.foundRatio, 1)} | ${t.inGame}/${t.found} | ${t.exact}/${t.found} | ${t.structural}/${t.found} | ${frac(t.hM, t.hG)} | ${frac(t.hM, t.hT)} | ${frac(t.tM, t.tG)} | ${frac(t.tM, t.tT)} | ${fv('event')} / ${fv('mode')} / ${fv('cooldown')} / ${fv('maxuses')} |`);
 }
 out.push('');
 const misPicked = results.filter((r) => r.loaderPick);

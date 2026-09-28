@@ -199,9 +199,15 @@ npm run evaluate -- <CS2-ZE-Configs/entwatch> "C:\Program Files (x86)\Steam\stea
 `evaluate` は、読み込めたマップのうち同名の GFL 設定があるものについて、設定の各アイテムでツールの提案と
 ハンドラ / トリガーの hammerid、type / event / mode / cooldown / maxuses を突き合わせ、`eval/report.md`（全体とマップ別の一致率）、
 `eval/details.md`（一致しなかったアイテムごとの差分）、`eval/results.json` を書き出します。複数のマップを含むパッケージでは
-設定と同名のマップを使い、ローダー単体なら別のマップを読む場合はレポートに出します。ヒューリスティクスを変えたときは
-この数字で良くなったか確かめてください（アイテムが完全一致する割合は 2026-09 時点で約 41%。残りの多くは、同じ配線でも
-ボタン単独で数えるかボタン + 後段で数えるかといった設定作者ごとの書き方の違いです）。
+設定と同名のマップを使い、ローダー単体なら別のマップを読む場合はレポートに出します。
+
+report.md 先頭の「ゲーム内で設定と同じ動きをするアイテム」は、CS2Fixes での動作で比べた指標です。ボタン単独で数えるか、
+ボタンのフック + 後段のフィルタ / リレーで数えるかといった書き方だけの違いは同じとみなし、次を確かめます:
+GFL がフックするボタンをフックしているか（CS2Fixes は button ハンドラで持ち主以外の +use を止めます）、GFL の各ハンドラに
+同じ使用で発火する相手があり余分なハンドラが無いか、チャット通知 / HUD 表示が同じか（mode 5 の counter は通知しません）、
+cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers。
+「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
+良くなったか確かめてください（2026-09 時点で、ゲーム内で同じ動き 59%、完全一致 45%）。
 
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
@@ -291,9 +297,13 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
 - Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
   that is not a skybox and has the most entity data, not the biggest file.
 - Accuracy: `npm run evaluate -- <CS2-ZE-Configs/entwatch> <workshop/content/730 or map folders> --out eval` compares
-  the suggestions with the GFL configs of every map it can load (report.md, details.md, results.json). About 41% of
-  the items come out identical (Sept 2026); most of the rest differ in per-author style (counting the button itself vs.
-  a plain button hook plus the filter / relay behind it). GFL's `"type": "counter"` / `"mode": 6` are not supported.
+  the suggestions with the GFL configs of every map it can load (report.md, details.md, results.json). The headline
+  metric is whether an item would behave like the config in CS2Fixes: per-author style is accepted (counting the button
+  itself vs. a plain button hook plus the filter / relay behind it), and it checks that the buttons GFL hooks are hooked
+  (CS2Fixes blocks other players' +use on them), every GFL handler has a counterpart firing on the same use and there
+  are no extra ones, uses are announced / shown alike (a counter in mode 5 never announces), the cooldown is within 1 s
+  (2 s or less counts as none), the max uses and the triggers. Sept 2026: 59% behave the same in game, 45% are
+  identical; "What differs in game" lists the rest by kind. GFL's `"type": "counter"` / `"mode": 6` are not supported.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.
