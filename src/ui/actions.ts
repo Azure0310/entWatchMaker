@@ -337,3 +337,35 @@ export function pickRemapCandidate(from: string, entity: MapEntity): void {
 export function clearRemapReport(): void {
   store.set({ remapReport: null });
 }
+
+/** Downloads every entity (props + connections) as JSON, for sharing a map's wiring without the map. */
+export function exportEntityDump(): void {
+  const { map } = store.get();
+  if (!map) return;
+  const dump = {
+    tool: 'entWatchMaker',
+    mapName: map.mapName,
+    sourceKind: map.sourceKind,
+    sourceFiles: map.sourceFiles,
+    stats: map.stats,
+    warnings: map.warnings,
+    entities: map.entities.map((e) => ({
+      hammerid: e.hammerId,
+      classname: e.classname,
+      targetname: e.targetname,
+      container: e.source.container,
+      templated: e.source.templated,
+      props: e.props,
+      connections: e.connections,
+    })),
+  };
+  const blob = new Blob([JSON.stringify(dump)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${map.mapName}.entities.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

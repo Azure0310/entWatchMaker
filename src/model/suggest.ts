@@ -1,9 +1,14 @@
 import type { EntityGraph } from './graph';
-import { friendlyName, type MapEntity } from './entity';
+import { friendlyName, isWeaponEntity, type MapEntity } from './entity';
 import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entwatch';
 import { newHandler, newItem } from './entwatch';
 import { hasSelfCooldown, inferCooldown } from './cooldown';
 import { suggestEvents } from './events';
+import { findSelectionTriggers, isKnife, stripsVia } from './triggers';
+import { HOOKABLE_TRIGGERS, abilityOutputs, hasUseOutput, isArmInput, isCounter, isFilter, isGameUi, isGate, isHousekeepingInput, isUseEntity, isUseLike, keyLabel } from './roles';
+import { minDistance, origin } from './position';
+
+export { HOOKABLE_TRIGGERS } from './roles';
 
 /** Outputs entity classes are known to fire (used for the event picker). */
 export const KNOWN_OUTPUTS: Record<string, string[]> = {
@@ -115,8 +120,13 @@ function suggestHandlerBase(e: MapEntity): HandlerSuggestion {
   if (cls === 'func_physbox' || cls === 'func_physbox_multiplayer' || cls.startsWith('prop_physics')) {
     return { type: 'button', event: pick('OnPlayerUse', 'OnDamaged'), mode: 2, reason: 'use-able physics entity' };
   }
-  if (cls === 'game_ui') {
-    return { type: 'other', event: pick('PressedAttack', 'PlayerOn', 'PressedAttack2'), mode: 2, reason: 'game_ui' };
+  if (isGameUi(e)) {
+    const ab = abilityOutputs(e);
+    const event =
+      ab.find((a) => /attack$/i.test(a.key))?.output ??
+      ab[0]?.output ??
+      (cls === 'game_ui' ? pick('PressedAttack', 'PlayerOn', 'PressedAttack2') : pick('OnCase01', 'OnDefault'));
+    return { type: 'other', event, mode: 2, reason: cls === 'game_ui' ? 'game_ui' : 'game_ui script (logic_case)' };
   }
   if (cls.startsWith('filter_')) {
     return { type: 'other', event: pick('OnPass', 'OnFail'), mode: 2, reason: 'filter' };
@@ -176,20 +186,15 @@ export function suggestItemName(e: MapEntity): { name: string; shortname: string
   return { name, shortname };
 }
 
-const USE_CLASSES = new Set(['func_button', 'func_rot_button', 'momentary_rot_button', 'func_physbox', 'func_physbox_multiplayer', 'func_physical_button', 'game_ui', 'prop_physics', 'prop_physics_multiplayer', 'prop_physics_override']);
-/** The only trigger classes CS2Fixes hooks for the "triggers" list (eban touch block). */
-export const HOOKABLE_TRIGGERS = new Set(['trigger_teleport', 'trigger_multiple', 'trigger_once']);
 const ENABLE_INPUTS = new Set(['enable', 'unlock', 'open', 'turnon', 'start']);
-const GATE_CLASSES = new Set(['logic_relay', 'logic_case', 'logic_branch', 'logic_compare', 'logic_timer']);
-const SKIP_CLASSES = new Set(['worldspawn', 'point_template', 'env_entity_maker', 'info_target', 'info_teleport_destination', 'prop_dynamic', 'prop_dynamic_override', 'prop_static', 'light', 'light_spot', 'light_omni', 'env_sprite', 'env_sprite_clientside', 'info_particle_system', 'env_soundscape', 'ambient_generic', 'func_brush', 'func_movelinear', 'func_door', 'func_door_rotating', 'func_tracktrain', 'path_track', 'phys_constraint', 'phys_hinge', 'point_clientcommand', 'point_servercommand', 'game_text', 'env_shake', 'env_fade', 'env_hudhint']);
-
-function isUse(e: MapEntity): boolean {
-  return USE_CLASSES.has(e.classname);
-}
-/** Buttons and touch triggers alike can start an item's chain. */
-function isUseLike(e: MapEntity): boolean {
-  return USE_CLASSES.has(e.classname) || HOOKABLE_TRIGGERS.has(e.classname);
-}
+const SKIP_CLASSES = new Set([
+  'worldspawn', 'point_template', 'env_entity_maker', 'info_target', 'info_teleport_destination', 'prop_dynamic', 'prop_dynamic_override',
+  'prop_static', 'light', 'light_spot', 'light_omni', 'env_sprite', 'env_sprite_clientside', 'info_particle_system', 'env_soundscape',
+  'ambient_generic', 'snd_event_point', 'func_brush', 'func_movelinear', 'func_door', 'func_door_rotating', 'func_tracktrain', 'path_track',
+  'phys_constraint', 'phys_hinge', 'point_clientcommand', 'point_servercommand', 'game_text', 'env_shake', 'env_fade', 'env_hudhint',
+  'point_entity_finder', 'point_script', 'logic_script', 'point_teleport', 'logic_measure_movement', 'env_physexplosion', 'env_explosion',
+  'logic_auto', 'point_viewcontrol', 'env_entity_igniter',
+]);
 
 /**
  * True when the trigger is one a holder touches to fire the item (its outputs feed the item's
@@ -202,33 +207,16 @@ export function isActivationTrigger(graph: EntityGraph, trig: MapEntity, chain: 
   // firing into a handler counts; killing/stripping the weapon itself does not activate anything
   const feedsChain = graph
     .relationsOf(trig)
-    .some((r) => r.kind === 'output' && chain.has(r.other.id) && !r.other.classname.startsWith('weapon_') && !/^kill/i.test(r.connection?.input ?? ''));
+    .some((r) => r.kind === 'output' && chain.has(r.other.id) && !isWeaponEntity(r.other) && !/^kill/i.test(r.connection?.input ?? ''));
   const cooldownChain = suggestEvents(graph, trig).some((g) => g.reason.includes('cooldown chain'));
   if (switchedOn && !feedsChain) return { ok: false, reason: 'effect zone switched on by the item; listing it would make ebanned players immune to it' };
   if (feedsChain) return { ok: true, reason: 'touching it fires the item handlers' };
   if (cooldownChain) return { ok: true, reason: 'touching it starts a cooldown chain' };
   return { ok: false, reason: 'does not fire the item (nothing it outputs reaches a handler)' };
 }
-function isFilter(e: MapEntity): boolean {
-  return e.classname.startsWith('filter_');
-}
-function isGate(e: MapEntity): boolean {
-  return GATE_CLASSES.has(e.classname);
-}
+
 function isInteresting(e: MapEntity): boolean {
-  return isUse(e) || isFilter(e) || isGate(e) || e.classname === 'math_counter' || e.classname.startsWith('trigger_');
-}
-
-function origin(e: MapEntity): [number, number, number] | null {
-  const parts = (e.props.origin ?? '').split(/\s+/).map(Number);
-  return parts.length === 3 && parts.every((n) => Number.isFinite(n)) ? [parts[0], parts[1], parts[2]] : null;
-}
-
-function distance(a: MapEntity, b: MapEntity): number | null {
-  const oa = origin(a);
-  const ob = origin(b);
-  if (!oa || !ob) return null;
-  return Math.hypot(oa[0] - ob[0], oa[1] - ob[1], oa[2] - ob[2]);
+  return isUseEntity(e) || isFilter(e) || isGate(e) || isCounter(e) || e.classname.startsWith('trigger_');
 }
 
 interface Candidate {
@@ -236,20 +224,52 @@ interface Candidate {
   why: string;
   /** 1 direct, 2 sibling (parent / template / lump), 3 one hop from a use-entity or filter, 4 proximity fallback */
   tier: number;
+  /** The game_ui key whose output fires it (PressedAttack, PressedAttack2, ...). */
+  key?: { ui: MapEntity; key: string };
+  /** Enabled by the weapon's OnPlayerPickup: a one-shot / per-holder gate. */
+  pickupEnabled?: boolean;
+  /** Reached through a gate that only handed the use on and was itself fed by a use entity. */
+  fedVia?: boolean;
+}
+
+/**
+ * What a gate does with its outputs. A combo step only arms / disarms other logic (Enable the
+ * next step, Disable itself); a pass-through only hands the use on to other gates (Trigger /
+ * Compare); anything else is an effect and makes the gate a handler candidate.
+ */
+function gateRole(graph: EntityGraph, x: MapEntity): { role: 'chain-step' | 'pass-through' | 'effects'; passOn: MapEntity[] } {
+  let effects = 0;
+  const passOn: MapEntity[] = [];
+  for (const c of x.connections) {
+    const targets = graph.connectionTargets(x, c);
+    const self = c.target.toLowerCase() === '!self' || (targets.length > 0 && targets.every((t) => t.id === x.id));
+    const logicOnly = targets.length > 0 && targets.every((t) => t.id === x.id || isGate(t) || isCounter(t) || isFilter(t));
+    if (isArmInput(c.input) && (self || logicOnly)) continue;
+    if (!self && logicOnly && !isGameUi(x)) {
+      for (const t of targets) if (t.id !== x.id && !passOn.includes(t)) passOn.push(t);
+      continue;
+    }
+    effects++;
+  }
+  if (effects > 0) return { role: 'effects', passOn };
+  return { role: passOn.length > 0 ? 'pass-through' : 'chain-step', passOn };
 }
 
 /**
  * Builds an item entry for a weapon entity and proposes handlers from related entities.
  *
  * Candidates come from, in order of confidence:
- *   1. entities parented to the weapon, targets of its outputs, entities naming it (filtername),
+ *   1. entities parented to the weapon, targets of its outputs (for OnPlayerPickup only the
+ *      game_ui it activates and the gates it enables), entities naming it (filtername),
  *      triggers that Kill it;
  *   2. siblings: children of the weapon's parent (weapon and button both parented to a prop),
  *      members of the same point_template, entities compiled into the same template lump;
- *   3. one hop from buttons / physboxes / game_ui / filters found so far;
+ *   3. one hop from buttons / physboxes / game_ui (per pressed key) / filters found so far;
  *   4. if nothing usable turned up: entities of interest within 200 units of the weapon.
- * Buttons are always taken; filters and relays only when something already included feeds them
- * or when they carry their own cooldown (Disable then delayed Enable).
+ * Buttons are taken when a player using them fires something; game_ui keys hand over to the
+ * relays behind them; filters need outputs and a button feeding them; relays / cases / counters
+ * need a use-entity feeding them (housekeeping inputs such as Kill / Disable do not count), their
+ * own cooldown wiring, or an OnPlayerPickup that arms them.
  */
 export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: ItemConfig; notes: string[] } {
   const notes: string[] = [];
@@ -264,20 +284,33 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   });
   const label = (x: MapEntity) => friendlyName(x.targetname) || x.classname;
 
-  const seen = new Set<number>([e.id]);
   const candidates: Candidate[] = [];
-  const consider = (other: MapEntity, why: string, tier: number) => {
-    if (seen.has(other.id) || SKIP_CLASSES.has(other.classname) || other.classname.startsWith('weapon_')) return;
-    seen.add(other.id);
-    candidates.push({ entity: other, why, tier });
+  const byId = new Map<number, Candidate>();
+  const consider = (other: MapEntity, why: string, tier: number, extra: Partial<Candidate> = {}) => {
+    if (other.id === e.id || SKIP_CLASSES.has(other.classname) || isWeaponEntity(other)) return;
+    const existing = byId.get(other.id);
+    if (existing) {
+      if (extra.key && !existing.key) existing.key = extra.key;
+      if (extra.pickupEnabled) existing.pickupEnabled = true;
+      return;
+    }
+    const c: Candidate = { entity: other, why, tier, ...extra };
+    candidates.push(c);
+    byId.set(other.id, c);
   };
 
   // ---- tier 1: direct relations -------------------------------------------------------------
   const PICKUP_OUTPUTS = new Set(['OnPlayerPickup', 'OnNPCPickup', 'OnCacheInteraction']);
   for (const rel of graph.relationsOf(e)) {
     if (rel.kind === 'child') consider(rel.other, `parented to weapon (${rel.label})`, 1);
-    else if (rel.kind === 'output') {
-      if (rel.connection && PICKUP_OUTPUTS.has(rel.connection.output)) continue;
+    else if (rel.kind === 'output' && rel.connection) {
+      if (PICKUP_OUTPUTS.has(rel.connection.output)) {
+        // picking the weapon up arms its game_ui, or enables its one-shot relay
+        const input = rel.connection.input.toLowerCase();
+        if (isGameUi(rel.other)) consider(rel.other, `activated by the weapon's ${rel.label}`, 1);
+        else if (rel.other.classname === 'logic_relay' && ENABLE_INPUTS.has(input)) consider(rel.other, `enabled by the weapon's ${rel.label}`, 1, { pickupEnabled: true });
+        continue;
+      }
       consider(rel.other, `weapon output ${rel.label}`, 1);
     } else if (rel.kind === 'keyref-in') consider(rel.other, `references weapon via ${rel.label}`, 1);
     else if (rel.kind === 'input' && rel.other.classname.startsWith('trigger_')) consider(rel.other, `fires ${rel.label} on weapon`, 1);
@@ -307,27 +340,41 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     }
   }
 
-  // ---- tier 3: one hop from use-entities and filters ------------------------------------------
-  for (const c of [...candidates]) {
-    if (c.tier > 2) continue;
-    if (isUse(c.entity)) {
-      for (const rel of graph.relationsOf(c.entity)) {
-        if (rel.kind === 'output') consider(rel.other, `${label(c.entity)} ${rel.label}`, 3);
-        if (rel.kind === 'child') consider(rel.other, `parented to ${label(c.entity)}`, 3);
+  // ---- tier 3: one hop from use-entities, game_ui keys, touch triggers and filters -------------
+  const expanded = new Set<number>();
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const x = c.entity;
+    if (expanded.has(x.id)) continue;
+    // a game_ui reached through a physbox (tier 3) still needs its keys followed; nothing else at tier 3 is expanded
+    if (c.tier > 3 || (c.tier === 3 && !isGameUi(x))) continue;
+    expanded.add(x.id);
+    if (isGameUi(x)) {
+      for (const ab of abilityOutputs(x)) {
+        for (const conn of x.connections) {
+          if (conn.output !== ab.output || isHousekeepingInput(conn.input)) continue;
+          for (const t of graph.connectionTargets(x, conn)) consider(t, `${label(x)} ${ab.output} (${ab.key}) → ${conn.input}`, 3, { key: { ui: x, key: ab.key } });
+        }
       }
-    } else if (HOOKABLE_TRIGGERS.has(c.entity.classname)) {
-      for (const rel of graph.relationsOf(c.entity)) if (rel.kind === 'output') consider(rel.other, `${label(c.entity)} ${rel.label}`, 3);
-    } else if (isFilter(c.entity)) {
-      for (const rel of graph.relationsOf(c.entity)) if (rel.kind === 'output') consider(rel.other, `${label(c.entity)} ${rel.label}`, 3);
+    } else if (isUseEntity(x)) {
+      for (const rel of graph.relationsOf(x)) {
+        if (rel.kind === 'output' && rel.connection && !isHousekeepingInput(rel.connection.input)) consider(rel.other, `${label(x)} ${rel.label}`, 3);
+        if (rel.kind === 'child') consider(rel.other, `parented to ${label(x)}`, 3);
+      }
+    } else if (HOOKABLE_TRIGGERS.has(x.classname) || isFilter(x)) {
+      for (const rel of graph.relationsOf(x)) {
+        if (rel.kind === 'output' && rel.connection && !isHousekeepingInput(rel.connection.input)) consider(rel.other, `${label(x)} ${rel.label}`, 3);
+      }
     }
   }
 
   // ---- tier 4: proximity fallback ------------------------------------------------------------
-  const usable = () => candidates.some((c) => isUse(c.entity) || isFilter(c.entity) || isGate(c.entity) || c.entity.classname === 'math_counter');
+  const usable = () =>
+    candidates.some((c) => (isUseEntity(c.entity) && hasUseOutput(c.entity)) || (isFilter(c.entity) && c.entity.connections.length > 0) || isGate(c.entity) || isCounter(c.entity));
   if (!usable() && origin(e)) {
     const near = graph.entities
       .filter((x) => x.id !== e.id && isInteresting(x) && (!e.source.templated || x.source.container === e.source.container))
-      .map((x) => ({ x, d: distance(e, x) }))
+      .map((x) => ({ x, d: minDistance(graph, e, x) }))
       .filter((p): p is { x: MapEntity; d: number } => p.d !== null && p.d <= 200)
       .sort((a, b) => a.d - b.d)
       .slice(0, 12);
@@ -337,45 +384,139 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
 
   // ---- selection -----------------------------------------------------------------------------
   const included = new Set<number>();
-  const fedBy = (x: MapEntity, pred: (from: MapEntity) => boolean) =>
-    graph.incomingConnections(x).some(({ from }) => included.has(from.id) && pred(from)) ||
+  /** `x` is fed (through a non-housekeeping input, a key reference or parenting) by an included entity matching `pred`. */
+  const feeds = (x: MapEntity, pred: (from: MapEntity) => boolean) =>
+    graph.incomingConnections(x).some(({ from, connection }) => included.has(from.id) && !isHousekeepingInput(connection.input) && pred(from)) ||
     graph.relationsOf(x).some((r) => (r.kind === 'keyref' || r.kind === 'parent') && included.has(r.other.id) && pred(r.other));
-  const fedByIncluded = (x: MapEntity) => fedBy(x, () => true);
+  const fedByIncluded = (x: MapEntity) => feeds(x, () => true);
   // a relay behind an already chosen filter/relay would just repeat that handler's event
-  const redundant = (x: MapEntity) => fedBy(x, (from) => isFilter(from) || isGate(from) || from.classname === 'math_counter');
+  // (a game_ui logic_case is a use entity, not such a gate)
+  const redundant = (x: MapEntity) => feeds(x, (from) => (isFilter(from) || isGate(from) || isCounter(from)) && !isGameUi(from));
   const chosen: { c: Candidate; extra?: string }[] = [];
   const skipped: string[] = [];
   const byOrder = [...candidates].sort((a, b) => a.tier - b.tier);
+  const uis: Candidate[] = [];
 
-  for (const c of byOrder) if (isUse(c.entity) && c.entity.hammerId) { included.add(c.entity.id); chosen.push({ c }); }
+  for (const c of byOrder) {
+    const x = c.entity;
+    if (!isUseEntity(x) || !x.hammerId) continue;
+    if (!hasUseOutput(x)) {
+      const outs = [...new Set(x.connections.map((k) => k.output))];
+      skipped.push(`${label(x)} (${x.classname}, using it fires nothing${outs.length > 0 ? `; only ${outs.join('/')} housekeeping` : '; no outputs'})`);
+      continue;
+    }
+    included.add(x.id);
+    if (isGameUi(x)) uis.push(c);
+    else chosen.push({ c });
+  }
   // touch triggers that start the chain count as feeders (they are confirmed as activation triggers below)
   const touchFeeders = byOrder.filter((c) => HOOKABLE_TRIGGERS.has(c.entity.classname) && c.entity.connections.some((k) => /^on(start)?touch|^ontrigger/i.test(k.output)));
   for (const c of touchFeeders) included.add(c.entity.id);
   for (const c of byOrder) {
-    if (!isFilter(c.entity) || !c.entity.hammerId || included.has(c.entity.id)) continue;
-    if (c.tier === 1 || fedByIncluded(c.entity)) { included.add(c.entity.id); chosen.push({ c }); }
-    else skipped.push(`${label(c.entity)} (filter, not fed by a button)`);
-  }
-  for (const c of byOrder) {
     const x = c.entity;
-    if (!(isGate(x) || x.classname === 'math_counter') || !x.hammerId || included.has(x.id)) continue;
-    if (redundant(x)) {
+    if (!isFilter(x) || !x.hammerId || included.has(x.id)) continue;
+    if (x.connections.length === 0) {
+      skipped.push(`${label(x)} (filter with no outputs; it is part of the knife-removal wiring, not a handler)`);
+      continue;
+    }
+    if (c.tier === 1 || fedByIncluded(x)) {
+      included.add(x.id);
+      chosen.push({ c });
+    } else skipped.push(`${label(x)} (filter, not fed by a button)`);
+  }
+  const isGateCandidate = (o: Candidate) => (isGate(o.entity) || isCounter(o.entity)) && !isGameUi(o.entity);
+  const gateCount = candidates.filter(isGateCandidate).length;
+  const gateQueue = byOrder.filter(isGateCandidate);
+  const decided = new Set<number>();
+  while (gateQueue.length > 0) {
+    const c = gateQueue.shift()!;
+    const x = c.entity;
+    if (!x.hammerId || included.has(x.id) || decided.has(x.id)) continue;
+    decided.add(x.id);
+    const strip = stripsVia(graph, x, 1);
+    if (strip) {
+      skipped.push(`${label(x)} (${x.classname}, strips the player: selection wiring rather than an ability; ${strip.via})`);
+      continue;
+    }
+    if (redundant(x) && !c.pickupEnabled) {
       skipped.push(`${label(x)} (${x.classname}, sits behind a handler that already reports the use)`);
       continue;
     }
-    const fed = fedBy(x, isUseLike);
+    const fed = feeds(x, isUseLike) || c.fedVia === true;
     const selfCd = hasSelfCooldown(graph, x);
-    const gateCount = candidates.filter((o) => isGate(o.entity) || o.entity.classname === 'math_counter').length;
-    if (fed || selfCd || (c.tier <= 2 && gateCount <= 2)) {
+    const { role, passOn } = gateRole(graph, x);
+    if (role === 'chain-step') {
+      skipped.push(`${label(x)} (${x.classname}, only arms or disarms other logic: a step of a key combo, not an ability)`);
+      continue;
+    }
+    if (role === 'pass-through' && !selfCd) {
+      // the gate it hands the use to is the one that does something: judge that one instead
+      skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${passOn.map(label).join(', ')})`);
+      for (const t of passOn) {
+        if (byId.has(t.id)) continue;
+        consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: fed || undefined });
+        const nc = byId.get(t.id);
+        if (nc) gateQueue.push(nc);
+      }
+      continue;
+    }
+    if (x.classname === 'logic_timer' && !fed) {
+      skipped.push(`${label(x)} (logic_timer, a periodic effect rather than a use)`);
+      continue;
+    }
+    if (fed || selfCd || c.pickupEnabled || (c.tier <= 2 && gateCount === 1)) {
       included.add(x.id);
-      chosen.push({ c, extra: fed ? 'fed by a button/trigger' : selfCd ? 'has its own Disable/Enable cooldown' : 'only gate in the group' });
+      chosen.push({
+        c,
+        extra: c.key
+          ? `fired by ${label(c.key.ui)} on ${c.key.key}`
+          : fed
+            ? 'fed by a button/trigger'
+            : selfCd
+              ? 'has its own cooldown wiring'
+              : c.pickupEnabled
+                ? 'armed by the weapon pickup'
+                : 'only gate in the group',
+      });
     } else skipped.push(`${label(x)} (${x.classname}, not fed by the item and no cooldown pattern)`);
+  }
+  // a one-shot relay armed by the pickup replaces the pass-through filter in front of it
+  for (const g of chosen.filter(({ c }) => c.pickupEnabled)) {
+    for (let i = chosen.length - 1; i >= 0; i--) {
+      const f = chosen[i].c.entity;
+      if (!isFilter(f)) continue;
+      const effects = f.connections.filter((k) => !isHousekeepingInput(k.input));
+      const onlyToGate = effects.length > 0 && effects.every((k) => graph.connectionTargets(f, k).every((t) => t.id === g.c.entity.id));
+      if (onlyToGate) {
+        chosen.splice(i, 1);
+        included.delete(f.id);
+        skipped.push(`${label(f)} (filter only passes the use on to ${label(g.c.entity)}, which reports it)`);
+      }
+    }
+  }
+  // the game_ui itself reports the press only when nothing behind its keys qualified
+  for (const c of uis) {
+    const ui = c.entity;
+    const behind = chosen.filter(({ c: o }) => o.key?.ui.id === ui.id || feeds(o.entity, (from) => from.id === ui.id));
+    if (behind.length === 0) chosen.push({ c, extra: 'no relay behind its key outputs, so the ui reports the press itself' });
+    else notes.push(`game_ui ${label(ui)}: ${behind.map(({ c: o }) => `${o.key?.key ?? 'output'} → ${label(o.entity)}`).join(', ')}`);
+  }
+  const keysPerUi = new Map<number, Set<string>>();
+  for (const { c } of chosen) {
+    if (!c.key) continue;
+    const set = keysPerUi.get(c.key.ui.id) ?? new Set<string>();
+    set.add(c.key.key);
+    keysPerUi.set(c.key.ui.id, set);
   }
 
   const triggers: string[] = [];
   const chainIds = new Set<number>([e.id, ...chosen.map(({ c }) => c.entity.id)]);
+  // knife / class items: triggers that spawn, strip or land on the knife (found by position, not by name)
+  const selection = isKnife(e) ? findSelectionTriggers(graph, e) : [];
+  const selectionIds = new Set(selection.map((s) => s.trigger.id));
   for (const c of byOrder) {
     if (!c.entity.classname.startsWith('trigger_') || !c.entity.hammerId) continue;
+    if (selectionIds.has(c.entity.id)) continue; // reported below
     const verdict = isActivationTrigger(graph, c.entity, chainIds);
     if (verdict.ok) {
       triggers.push(c.entity.hammerId);
@@ -390,6 +531,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     const ent = c.entity;
     const s = suggestHandler(ent, graph);
     const h: HandlerConfig = newHandler({
+      name: c.key && (keysPerUi.get(c.key.ui.id)?.size ?? 0) >= 2 ? keyLabel(c.key.key) : undefined,
       type: s.type,
       hammerid: ent.hammerId,
       event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
@@ -405,6 +547,14 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     if (h.templated === false) notes.push(`templated=false: the weapon is spawned by a template but ${label(ent)} is a single map entity`);
     if (s.eventReason && s.event) notes.push(`event ${s.event}: ${s.eventReason}`);
     if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
+  }
+  if (isKnife(e)) {
+    if (selection.length === 0) notes.push('knife item: no strip zone, teleport landing or template spawner for it was found (radius 256 / 384 units)');
+    for (const st of selection) {
+      if (!st.trigger.hammerId || triggers.includes(st.trigger.hammerId)) continue;
+      triggers.push(st.trigger.hammerId);
+      notes.push(`trigger ${label(st.trigger)}: ${st.reason}`);
+    }
   }
   for (const sk of skipped) notes.push(`skipped ${sk}`);
   item.triggers = triggers;

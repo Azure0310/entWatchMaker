@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fixture, fixturePath } from './helpers';
 import { writeVpk } from './vpkWriter';
 import { VpkArchive, bufferByteSource } from '../src/formats/vpk';
@@ -53,6 +53,18 @@ describe('nested (workshop style) vpk', () => {
   });
 
   it('writes the workshop style fixture used by the browser tests', () => {
-    writeFileSync(fixturePath('workshop_nested.vpk'), pkg);
+    // other test files read this fixture concurrently: rewrite it only when it changed, and atomically
+    const target = fixturePath('workshop_nested.vpk');
+    let same = false;
+    try {
+      same = Buffer.compare(readFileSync(target), Buffer.from(pkg)) === 0;
+    } catch {
+      same = false;
+    }
+    if (!same) {
+      const tmp = `${target}.${process.pid}.tmp`;
+      writeFileSync(tmp, pkg);
+      renameSync(tmp, target);
+    }
   });
 });

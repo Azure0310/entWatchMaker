@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { validateConfig } from '../model/validate';
-import { clearMap, setLang } from './actions';
+import { clearMap, exportEntityDump, setLang } from './actions';
 import { ConfigPanel } from './ConfigPanel';
 import { DropZone } from './DropZone';
 import { EntityList } from './EntityList';
@@ -43,6 +43,9 @@ export function App() {
                 </ul>
               </details>
             )}
+            <button type="button" className="btn" onClick={() => exportEntityDump()} title={t('map.exportHint')} data-testid="export-entities">
+              {t('map.export')}
+            </button>
             <button type="button" className="btn" onClick={() => clearMap()} data-testid="reload-map">
               {t('map.reload')}
             </button>

@@ -52,7 +52,6 @@ export class EntityGraph {
   private readonly byName = new Map<string, Map<string, MapEntity[]>>();
   private readonly globalByName = new Map<string, MapEntity[]>();
   private readonly relations = new Map<number, Relation[]>();
-  private readonly nameList: { name: string; lower: string }[] = [];
 
   constructor(entities: MapEntity[]) {
     this.entities = entities;
@@ -64,17 +63,17 @@ export class EntityGraph {
         else this.byHammerId.set(e.hammerId, [e]);
       }
       if (e.targetname) {
+        // index the name as written and without the compiler decorations ([PR#] prefix,
+        // &0000 template instance suffix) so references in either form resolve
         const lower = e.targetname.toLowerCase();
-        this.addName(this.scopeMap(e.source.scope), lower, e);
-        this.addName(this.globalByName, lower, e);
-        const friendly = friendlyName(lower);
-        if (friendly !== lower) {
-          this.addName(this.scopeMap(e.source.scope), friendly, e);
-          this.addName(this.globalByName, friendly, e);
+        const friendly = friendlyName(e.targetname).toLowerCase();
+        for (const key of new Set([lower, friendly])) {
+          if (!key) continue;
+          this.addName(this.scopeMap(e.source.scope), key, e);
+          this.addName(this.globalByName, key, e);
         }
       }
     }
-    for (const [lower] of this.globalByName) this.nameList.push({ name: lower, lower });
     this.buildRelations();
   }
 
@@ -96,13 +95,16 @@ export class EntityGraph {
 
   /**
    * Resolves an entity name reference the way the game does: exact name (case insensitive),
-   * trailing `*` wildcard, and the `[PR#]` prefix stripped or added. Entities in the same scope
-   * win; other scopes are used as a fallback so prefab instances still resolve.
+   * trailing `*` wildcard, and the `[PR#]` prefix / `&0000` template suffix stripped or added.
+   * Entities in the same scope win; other scopes are used as a fallback so prefab instances
+   * still resolve. When several entities match and `container` is given, the ones compiled
+   * into that lump win (a template instance referring to its own members).
    */
-  resolveName(ref: string, scope?: string): MapEntity[] {
+  resolveName(ref: string, scope?: string, container?: string): MapEntity[] {
     const raw = ref.trim();
     if (!raw || raw.startsWith('!')) return [];
-    const lower = friendlyName(raw.toLowerCase());
+    const lower = friendlyName(raw).toLowerCase();
+    if (!lower) return [];
     const lookup = (map: Map<string, MapEntity[]>): MapEntity[] => {
       if (lower.endsWith('*')) {
         const prefix = lower.slice(0, -1);
@@ -114,14 +116,17 @@ export class EntityGraph {
       }
       return map.get(lower) ?? [];
     };
+    let hits: MapEntity[] = [];
     if (scope !== undefined) {
       const local = this.byName.get(scope);
-      if (local) {
-        const hit = lookup(local);
-        if (hit.length > 0) return hit;
-      }
+      if (local) hits = lookup(local);
     }
-    return lookup(this.globalByName);
+    if (hits.length === 0) hits = lookup(this.globalByName);
+    if (hits.length > 1 && container) {
+      const same = hits.filter((e) => e.source.container === container);
+      if (same.length > 0) return same;
+    }
+    return hits;
   }
 
   relationsOf(e: MapEntity): Relation[] {
@@ -178,7 +183,7 @@ export class EntityGraph {
         if (!value || NEVER_REF_KEYS.has(key)) continue;
         const explicit = NAME_REF_KEYS.has(key);
         if (!explicit && !this.looksLikeName(value)) continue;
-        const targets = this.resolveName(value, e.source.scope);
+        const targets = this.resolveName(value, e.source.scope, e.source.container);
         for (const t of targets) {
           if (t === e) continue;
           const isParent = key === 'parentname';
@@ -193,8 +198,8 @@ export class EntityGraph {
   }
 
   private looksLikeName(value: string): boolean {
-    // cheap pre-check: does any known targetname equal this value (ignoring [PR#])?
-    const lower = friendlyName(value.toLowerCase());
+    // cheap pre-check: does any known targetname equal this value (ignoring [PR#] / &0000)?
+    const lower = friendlyName(value).toLowerCase();
     if (lower.length < 2) return false;
     if (this.globalByName.has(lower)) return true;
     if (lower.endsWith('*')) return true;
@@ -217,7 +222,7 @@ export class EntityGraph {
       case 2:
       case 7:
       default: {
-        const byName = this.resolveName(target, from.source.scope);
+        const byName = this.resolveName(target, from.source.scope, from.source.container);
         if (byName.length > 0) return byName;
         if (c.targetType === 7) {
           const lower = target.toLowerCase();

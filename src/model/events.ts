@@ -1,6 +1,7 @@
 import type { EntityGraph } from './graph';
 import { friendlyName, type EntityConnection, type MapEntity } from './entity';
 import { KNOWN_OUTPUTS } from './suggest';
+import { VALUE_INPUTS } from './cooldown';
 
 /**
  * Picks which output of an entity EntWatch should watch as the item's "event".
@@ -55,6 +56,8 @@ function analyseChain(graph: EntityGraph, e: MapEntity, output: string): ChainIn
   const info: ChainInfo = { reachesDelayedReenable: false, reachesLock: false, effects: 0, delayed: null };
   const seen = new Set<number>();
   const effectTargets = new Set<string>();
+  // SetValue now + SetValue back after a delay on a branch/compare/counter is a cooldown too
+  const valueSets = new Map<string, { immediate: boolean; delayed: EntityConnection | null }>();
   const walk = (from: MapEntity, conns: EntityConnection[], depth: number) => {
     for (const c of conns) {
       const input = c.input.toLowerCase();
@@ -63,6 +66,14 @@ function analyseChain(graph: EntityGraph, e: MapEntity, output: string): ChainIn
       if (REENABLE.has(input) && c.delay > 0) {
         info.reachesDelayedReenable = true;
         if (!info.delayed || c.delay > info.delayed.delay) info.delayed = c;
+      }
+      if (VALUE_INPUTS.has(input)) {
+        const key = targets.length > 0 ? targets.map((t) => t.id).join(',') : `${from.id}:${c.target.toLowerCase()}`;
+        const v = valueSets.get(key) ?? { immediate: false, delayed: null };
+        if (c.delay > 0) {
+          if (!v.delayed || c.delay > v.delayed.delay) v.delayed = c;
+        } else v.immediate = true;
+        valueSets.set(key, v);
       }
       if (LOCK.has(input)) info.reachesLock = true;
       if (!HOUSEKEEPING.has(input) || !selfOnly) effectTargets.add(`${c.target.toLowerCase()}|${input}`);
@@ -75,6 +86,11 @@ function analyseChain(graph: EntityGraph, e: MapEntity, output: string): ChainIn
     }
   };
   walk(e, e.connections.filter((c) => c.output === output), 0);
+  for (const v of valueSets.values()) {
+    if (!v.immediate || !v.delayed) continue;
+    info.reachesDelayedReenable = true;
+    if (!info.delayed || v.delayed.delay > info.delayed.delay) info.delayed = v.delayed;
+  }
   info.effects = effectTargets.size;
   return info;
 }

@@ -99,8 +99,35 @@ English summary is at the bottom.
 最後に classname ごとの事前確率（filter → `OnPass`、button → `OnPressed`、relay → `OnTrigger` …）で順位付けします。
 自身を `Kill` / `Lock` するだけの出力は下位になります。ハンドラ編集欄の event 候補はこの順で並び、推定と違う値のときは根拠付きで提案が出ます。
 
-**クールダウン推定**: `Lock` → 遅延付き `Unlock`、`Disable` → 遅延付き `Enable`、ボタンの `wait` から秒数を読みます。
+**クールダウン推定**: `Lock` → 遅延付き `Unlock`、`Disable` → 遅延付き `Enable`、ボタンの `wait`、
+logic_branch / logic_compare / math_counter の `SetValue 1` → 遅延付き `SetValue 0` から秒数を読みます。
 ハンドラ自身、その手前のボタン / physbox / game_ui、その先のフィルタ / リレー、親付けされた trigger を見ます。
+
+**game_ui（クラス系アイテムの左右クリック）**: `game_ui` 本体だけでなく、`vscripts=game_ui` を持ち `caseNN` に
+`PressedAttack` などのキー名を書いた `logic_case`（スクリプト実装。skyrim / minas tirith などの workshop マップで一般的）も
+game_ui として扱います。武器の `OnPlayerPickup → Activate` から ui を見つけ、キーごとの出力（`OnCaseNN` / `PressedAttack`）の先にある
+リレー / compare / counter をハンドラにします。キーが 2 つ以上あるときはハンドラの `name` にキー名（`Attack` / `Attack2` / `Forward` …）を入れます。
+ui 自身は、後ろに何も無いときだけハンドラになります。
+
+**ハンドラにしないもの**: `Kill` / `Disable` / `Enable` / `Deactivate` / `CancelPending` / `Lock` / `Unlock` などの後始末入力は
+「ボタンから撃たれている」に数えません。`OnBreak` しか撃たない physbox（当たり判定）、出力の無い filter（ナイフ除去用の部品）、
+他のロジックを Enable / Disable するだけの relay（キーコンボの段）、他の relay に `Trigger` するだけの relay（先の relay を代わりに判定）、
+strip を撃つ relay、ボタンから撃たれていない logic_timer は候補から外し、理由をメモに出します。
+
+**テンプレート（point_template）**: `NNN#entityLumpName` という lump は point_template #NNN の子で、中の `origin` は
+テンプレート基準のローカル座標です。距離を測るときは、そのテンプレートを `entitytemplate` に持つ env_entity_maker
+（無ければ point_template 自身）の origin を足してワールド座標にします。名前修飾（`[PR#]` 接頭辞、`&0000` 接尾辞）は
+名前解決のときに外すので、`template07=[PR#]ww_knife` から `[PR#]ww_knife&0000` が引けます。
+
+**ナイフ / クラス系アイテムの `triggers`**: ナイフは武器を strip しないと拾えないため、こうしたアイテムは
+「アイテムの上の strip ゾーン」と「そこへ飛ばすテレポート」で配られます。どちらも武器と名前でつながっていないので、
+`weapon_knife*` / `weapon_bayonet` のときは次を `triggers` 候補にします。
+- 武器のテンプレートを `ForceSpawn` する trigger（env_entity_maker 経由も含む）
+- 武器の周囲 256 ユニット以内の strip ゾーン。strip の判定は `player_weaponstrip` / `game_player_equip`、
+  `point_script` への `RunScriptInput "*Strip*"`、`point_entity_finder` の `FindEntity`（`OnFoundEntity → Kill`）
+- 着地点（`trigger_teleport` の `target`、または `point_teleport`）が武器から 384 ユニット以内、または strip ゾーンの上にあるテレポート。
+  着地点は **最も近い武器にだけ** 割り当てるので、隣のアイテムのテレポートは付きません
+ヘッダの「エンティティ一覧を書き出す」で全エンティティを JSON 保存できるので、推定がうまくいかないマップはそのファイルで配線を確認できます。
 
 **I/O 検索**: 中央上のタブでマップ内の全接続を検索できます（例: `in:unlock`、`out:onpressed`、`from:materia`、`class:filter`、遅延ありのみ）。
 行の「+」で、その送信元エンティティをその出力を event にしたハンドラとして追加できます。
@@ -133,6 +160,22 @@ npm run build         # dist/ に静的サイトを出力
 npm run build:single  # release/entwatchmaker.html（全部入りの 1 ファイル）を生成
 ```
 
+### コマンドラインで解析する（Node.js がある PC 向け）
+
+```bash
+# 全エンティティを JSON に書き出す（UI の「エンティティ一覧を書き出す」と同じ形式）
+npm run dump:entities -- "C:\Program Files (x86)\Steam\steamapps\workshop\content\730\3242492031" out.json
+
+# 既存の jsonc とツールの推定を武器ごとに突き合わせ、ハンドラ / トリガーの配線と周辺エンティティをレポートする
+npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] [--all] > report.md
+```
+
+`diagnose` は推定に失敗したマップを調べるためのもので、「ツールの提案 vs 設定」「設定のハンドラ / トリガーがどのエンティティで、誰に撃たれ、何を撃つか」「武器の周囲 512 ユニットにあるもの」を出します。テンプレート内のエンティティは、ローカル座標に加えてワールド座標も表示します。
+
+`tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
+（`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
+ツールが再現できるかを採点します（無ければスキップ）。ヒューリスティクスを変えたときの回帰確認に使います。
+
 ### 構成
 
 | パス | 内容 |
@@ -147,6 +190,7 @@ npm run build:single  # release/entwatchmaker.html（全部入りの 1 ファイ
 | `src/model/entwatch.ts` | jsonc のシリアライズ / パース |
 | `src/model/validate.ts` | 設定の検証 |
 | `src/ui/` | React UI（日本語 / English） |
+| `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート） |
 
 パーサは [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat) と
 [Datamodel.NET](https://github.com/ValveResourceFormat/Datamodel.NET) の実装を参照して書き、
@@ -162,6 +206,10 @@ push で `.github/workflows/pages.yml` がビルドして公開します。
 - 古い NTRO 形式のエンティティランプ（CS2 以前の Source 2 タイトル）は未対応です。
 - `.vmap` はバイナリ形式 (`dmx encoding binary 9`) のみ対応です（Hammer の既定）。
 - プレハブ内エンティティの名前 fixup は再現していないため、プレハブをまたぐ接続は解決できないことがあります。
+- キーコンボ（複数のキーを順番に押すと発動する能力）は、次の段を `Enable` するだけの relay の連鎖なので途中は追えません。
+  最後の段が `Trigger` / `Compare` する先は拾いますが、コンボ本体のハンドラは I/O 検索で足してください。
+- `KeyValues origin` で位置を変えながら 1 つのテンプレートを何度も ForceSpawn するマップでは、テンプレート内の武器の位置は
+  最初の maker / テンプレートの位置としてしか計算できません。
 - ハンドラの推定はあくまで雛形です。マップごとの仕様（cooldown 秒数、maxuses など）は必ず確認してください。
 
 ---
@@ -185,8 +233,18 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   adjust event / mode / cooldown → download the jsonc. Existing configs can be imported and edited.
 - Suggestions follow the conventions of the 211 GFL CS2 ZE configs (plain `button` hook + `OnPass`/`OnTrigger` handler,
   `type` omitted for event handlers, counters for `math_counter`); the event is the output whose chain reaches a delayed
-  `Unlock`/`Enable`, the cooldown is that delay. An I/O search tab (`in:unlock`, `out:onpressed`, `class:filter`, …)
-  lists every connection in the map and can add a handler from any row.
+  `Unlock`/`Enable` (or a `SetValue 1` / delayed `SetValue 0` pair on a branch / compare / counter), the cooldown is that
+  delay. An I/O search tab (`in:unlock`, `out:onpressed`, `class:filter`, …) lists every connection in the map and can
+  add a handler from any row.
+- Class items: a `game_ui`, or its script stand-in (a `logic_case` with `vscripts=game_ui` and `caseNN = PressedAttack…`),
+  is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers (named
+  `Attack` / `Attack2` … when there are several keys). Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
+  count as "fed by a button", OnBreak-only physboxes, output-less filters, combo-step relays and strip relays are skipped.
+  Entities in `NNN#entityLumpName` lumps get world positions (env_entity_maker or point_template origin + local origin) and
+  the `[PR#]` / `&0000` name decorations are ignored when resolving names. Knife items get `triggers` from the trigger that
+  ForceSpawns their template, strip zones (`player_weaponstrip`, `point_script RunScriptInput "*Strip*"`,
+  `point_entity_finder` → Kill) within 256 units and teleports landing within 384 units, each landing assigned to the
+  nearest weapon only.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.
