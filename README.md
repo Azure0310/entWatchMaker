@@ -102,6 +102,13 @@ English summary is at the bottom.
 **クールダウン推定**: `Lock` → 遅延付き `Unlock`、`Disable` → 遅延付き `Enable`、ボタンの `wait` から秒数を読みます。
 ハンドラ自身、その手前のボタン / physbox / game_ui、その先のフィルタ / リレー、親付けされた trigger を見ます。
 
+**ナイフ / クラス系アイテムの `triggers`**: ナイフは武器を strip しないと拾えないため、こうしたアイテムは
+「アイテムの上の strip ゾーン（`player_weaponstrip` / `game_player_equip` を撃つ trigger）」と
+「そこへ飛ばすテレポート（`trigger_teleport` の `target`、または `point_teleport` を撃つ trigger）」で配られます。
+どちらも武器と名前でつながっていないので、武器の周囲 256 ユニット以内の strip ゾーンと、着地点が武器（384 ユニット）
+または strip ゾーンの近くにあるテレポートを `triggers` 候補にします（`weapon_knife*` / `weapon_bayonet` のときだけ）。
+ヘッダの「エンティティ一覧を書き出す」で全エンティティを JSON 保存できるので、推定がうまくいかないマップはそのファイルで配線を確認できます。
+
 **I/O 検索**: 中央上のタブでマップ内の全接続を検索できます（例: `in:unlock`、`out:onpressed`、`from:materia`、`class:filter`、遅延ありのみ）。
 行の「+」で、その送信元エンティティをその出力を event にしたハンドラとして追加できます。
 

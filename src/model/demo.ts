@@ -74,6 +74,19 @@ export function buildDemoMap(): ParsedMap {
     mk('trigger_multiple', 'push_trigger', '2201', { parentname: 'push_weapon', wait: '1', spawnflags: '1' }, [c('OnStartTouch', 'push_relay', 'Trigger')]),
     mk('logic_relay', 'push_relay', '2202', {}, [c('OnTrigger', '!self', 'Disable'), c('OnTrigger', '!self', 'Enable', '', 30), c('OnTrigger', 'push_zone', 'Enable'), c('OnTrigger', 'push_zone', 'Disable', '', 3)]),
     mk('trigger_multiple', 'push_zone', '2203', { startdisabled: '1', parentname: 'push_weapon' }, [c('OnStartTouch', '!activator', 'AddOutput', 'basevelocity 0 0 400')]),
+    // Nazgul (class item): a knife on the ground under a strip zone, reached by a teleport from a
+    // selection room; a second selection trigger strips + fires a point_teleport onto the same spot.
+    // Abilities are relays behind a button parented to the knife. A spawn strip far away must not be listed.
+    mk('weapon_knife', 'nazgul_weapon', '2400', { origin: '5000 5000 0' }),
+    mk('trigger_multiple', 'nazgul_strip', '2401', { origin: '5000 5000 8', wait: '0.1' }, [c('OnStartTouch', 'strip_all', 'Strip')]),
+    mk('player_weaponstrip', 'strip_all', '2402', { origin: '0 0 -500' }),
+    mk('trigger_teleport', 'nazgul_tp', '2403', { origin: '-5000 -5000 0', target: 'nazgul_dest' }),
+    mk('info_teleport_destination', 'nazgul_dest', '2404', { origin: '5000 5010 0' }),
+    mk('trigger_multiple', 'nazgul_tp2', '2405', { origin: '-5000 -4800 0' }, [c('OnStartTouch', 'strip_all', 'Strip'), c('OnStartTouch', 'nazgul_point_tp', 'Teleport')]),
+    mk('point_teleport', 'nazgul_point_tp', '2406', { origin: '5010 4990 0', target: '!activator' }),
+    mk('func_button', 'nazgul_button', '2407', { parentname: 'nazgul_weapon', spawnflags: '1024', wait: '1' }, [c('OnPressed', 'nazgul_relay', 'Trigger')]),
+    mk('logic_relay', 'nazgul_relay', '2408', {}, [c('OnTrigger', '!self', 'Disable'), c('OnTrigger', '!self', 'Enable', '', 25), c('OnTrigger', '!activator', 'SetHealth', '500')]),
+    mk('trigger_multiple', 'spawn_strip', '2410', { origin: '0 0 0' }, [c('OnStartTouch', 'strip_all', 'Strip')]),
     // Unrelated stuff
     mk('logic_auto', 'map_auto', '1500', {}, [c('OnMultiNewRound', 'round_relay', 'Trigger')]),
     mk('logic_relay', 'round_relay', '1501', {}, [c('OnTrigger', 'ice_template', 'ForceSpawn')]),
