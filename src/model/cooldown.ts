@@ -128,7 +128,7 @@ interface Step {
  * Inputs that only store a value (SetValueCompare / SetValueTest store and fire, so they carry on),
  * and Activate: a game_ui fires its key outputs when the holder presses keys later, not right away.
  */
-const STORE_INPUTS = new Set(['setvalue', 'setvaluenofire', 'setcomparevalue', 'activate']);
+const STORE_INPUTS = new Set(['setvalue', 'setvaluenofire', 'setcomparevalue', 'sethitmax', 'sethitmin', 'setmaxvaluenofire', 'setminvaluenofire', 'activate']);
 
 const COUNTER_LIMIT_OUTPUTS = /^on(hitmax|hitmin|changedfrommax|changedfrommin)$/i;
 
@@ -371,4 +371,88 @@ export function inferCooldown(graph: EntityGraph, e: MapEntity, event?: string):
   if (elsewhere.length === 0) return null;
   const best = elsewhere.reduce((a, b) => (b.seconds > a.seconds ? b : a));
   return { ...best, seconds: round(best.seconds), reason: `${best.reason}; the use locks it and other wiring opens it again` };
+}
+
+// ---- counters ------------------------------------------------------------------------------------
+
+export interface CounterUse {
+  type: 'counterup' | 'counterdown';
+  /** Set when reaching the limit locks the item for a while (CS2Fixes mode 4, CooldownAfterUses). */
+  afterUses: CooldownGuess | null;
+  /** Evidence, e.g. "fire_filter OnPass → Subtract 1 per use". */
+  reason: string;
+}
+
+/** The step an Add / Subtract makes (+n / -n), or null for other inputs. */
+function stepOf(c: EntityConnection): number | null {
+  const input = c.input.toLowerCase();
+  if (input !== 'add' && input !== 'subtract') return null;
+  const n = c.param.trim() === '' ? 1 : parseFloat(c.param);
+  if (!Number.isFinite(n)) return null;
+  return input === 'add' ? n : -n;
+}
+
+/**
+ * Whether a math_counter counts the item's uses: the item's use chain (what a button / game_ui
+ * fires) steps it by one per use, nothing drives it over time (a logic_timer, a loop of its own),
+ * and the source does not take the step back later (a combo meter that drops again). CS2Fixes
+ * announces the uses of such a counter in mode 3 (MaxUses); a counter that holds a charge or an
+ * amount is a value (mode 5), and CS2Fixes never prints its uses. On the evaluated maps this
+ * matches 57 of the 58 counters GFL writes in mode 3 / 4 and all 22 it writes in mode 5.
+ */
+export function counterUse(graph: EntityGraph, counter: MapEntity): CounterUse | null {
+  if (!isCounter(counter)) return null;
+  const incoming = aimedAt(graph, counter);
+  const changes = (c: EntityConnection) => stepOf(c) !== null || VALUE_INPUTS.has(c.input.toLowerCase());
+  if (incoming.some(({ from, c }) => from.classname === 'logic_timer' && changes(c))) return null;
+  if (incoming.some(({ from, c }) => from.id === counter.id && stepOf(c) !== null)) return null;
+  const steps = incoming.filter(({ from, c }) => from.id !== counter.id && stepOf(c) !== null);
+  if (steps.length === 0) return null;
+  // the use: steps from what a button / game_ui leads to (a stage relay refilling it is not one)
+  const pressed = (x: MapEntity) => isUseEntity(x) || inFront(graph, x).roots.some((r) => isUseEntity(r.root));
+  const touched = (x: MapEntity) => isUseLike(x) || inFront(graph, x).roots.length > 0;
+  const byPress = steps.filter(({ from }) => pressed(from));
+  const byTouch = steps.filter(({ from }) => touched(from));
+  const pool = byPress.length > 0 ? byPress : byTouch.length > 0 ? byTouch : steps;
+  const takesBack = (from: MapEntity) => {
+    const signs = steps.filter((s) => s.from.id === from.id).map((s) => Math.sign(stepOf(s.c)!));
+    return signs.includes(1) && signs.includes(-1);
+  };
+  const counted = pool.filter(({ from }) => !takesBack(from));
+  if (counted.length === 0) return null;
+  const values = counted.map(({ c }) => stepOf(c)!);
+  if (!values.every((v) => Math.abs(v) === 1)) return null;
+  if (!values.every((v) => v > 0) && !values.every((v) => v < 0)) return null;
+  const type = values[0] > 0 ? 'counterup' : 'counterdown';
+  const first = counted[0];
+  return {
+    type,
+    afterUses: cooldownAfterUses(graph, counter, type),
+    reason: `${label(first.from)} ${first.c.output} → ${first.c.input} ${first.c.param || '1'} per use`,
+  };
+}
+
+/**
+ * Mode 4 (CooldownAfterUses): reaching the limit (OnHitMax counting up, OnHitMin counting down)
+ * locks the item, and a delayed Unlock / Enable or a reset of the counter frees it again.
+ */
+function cooldownAfterUses(graph: EntityGraph, counter: MapEntity, type: CounterUse['type']): CooldownGuess | null {
+  const limit = type === 'counterup' ? 'OnHitMax' : 'OnHitMin';
+  const steps = useTimeline(graph, [{ e: counter, first: (o) => o.toLowerCase() === limit.toLowerCase() }]);
+  const events = gateEvents(steps);
+  const found: CooldownGuess[] = [];
+  for (const s of steps) {
+    if (!(s.t > ANTI_SPAM_SECONDS)) continue;
+    const input = s.c.input.toLowerCase();
+    for (const x of s.targets) {
+      const reset = x.id === counter.id && (VALUE_INPUTS.has(input) || stepOf(s.c) !== null);
+      const reopened = REENABLE_INPUTS.has(input) && canGate(x, true) && (events.get(x.id)?.closes.some((t) => t <= s.t) ?? false);
+      if (!reset && !reopened) continue;
+      const reason = `${label(counter)} ${limit} → … ${label(s.from)} ${s.c.output} → ${label(x)} ${s.c.input}${s.c.param ? ' ' + s.c.param : ''} (${round(s.t)}s after the last use)`;
+      found.push({ seconds: s.t, reason, entity: x });
+    }
+  }
+  if (found.length === 0) return null;
+  const best = found.reduce((a, b) => (b.seconds > a.seconds ? b : a));
+  return { ...best, seconds: round(best.seconds) };
 }

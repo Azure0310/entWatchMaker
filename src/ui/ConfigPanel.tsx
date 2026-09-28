@@ -84,7 +84,13 @@ function HandlerEditor({ item, h, issues }: { item: ItemConfig; h: HandlerConfig
             title={t('cfg.h.suggest')}
             onClick={() => {
               const s = suggestHandler(ent, graph ?? undefined);
-              set({ type: s.type, event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event, mode: s.mode, cooldown: s.cooldown ?? h.cooldown });
+              set({
+                type: s.type,
+                event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
+                mode: s.mode,
+                cooldown: s.cooldown ?? h.cooldown,
+                ...(s.message === false ? { message: false } : {}),
+              });
             }}
           >
             ✨

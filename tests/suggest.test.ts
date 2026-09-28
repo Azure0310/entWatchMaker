@@ -69,7 +69,9 @@ describe('graph + suggestions on the demo map', () => {
     expect(item.templated).toBeUndefined();
     const counter = item.handlers.find((h) => h.hammerid === '1303');
     expect(counter?.type).toBe('counterdown');
-    expect(counter?.mode).toBe(5);
+    // each press subtracts one: it counts uses, which CS2Fixes announces in mode 3 (not in mode 5)
+    expect(counter?.mode).toBe(3);
+    expect(counter?.message).toBe(true);
     expect(counter?.event).toBeUndefined();
   });
 

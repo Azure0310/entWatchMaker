@@ -70,7 +70,9 @@ export function validateConfig(config: EntWatchConfig, graph: EntityGraph | null
       if ((h.mode === 2 || h.mode === 3 || h.mode === 4) && !(h.cooldown && h.cooldown > 0) && h.mode !== 3) {
         issues.push({ level: 'info', itemUid: item.uid, handlerUid: h.uid, key: 'v.handlerNoCooldown' });
       }
-      if ((h.mode === 3 || h.mode === 4) && !(h.maxuses && h.maxuses > 0)) {
+      // a counter's max uses come from its min / max, not from maxuses
+      const counter = h.type === 'counterup' || h.type === 'counterdown';
+      if ((h.mode === 3 || h.mode === 4) && !counter && !(h.maxuses && h.maxuses > 0)) {
         issues.push({ level: 'warning', itemUid: item.uid, handlerUid: h.uid, key: 'v.handlerNoMaxUses' });
       }
       if (!graph) continue;

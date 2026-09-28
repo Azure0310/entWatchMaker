@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { MapEntity } from '../src/model/entity';
 import { EntityGraph } from '../src/model/graph';
-import { inferCooldown } from '../src/model/cooldown';
+import { counterUse, inferCooldown } from '../src/model/cooldown';
+import { suggestHandler, suggestItemForWeapon } from '../src/model/suggest';
 
 let nextId = 0;
 const mk = (classname: string, targetname: string, hammerId: string, props: Record<string, string> = {}, connections: MapEntity['connections'] = []): MapEntity => ({
@@ -91,5 +92,71 @@ describe('cooldown: the time until the gates the use goes through are open again
     // another ability of the item re-arms the branch: not this use's cooldown
     const other = mk('logic_relay', 'kirito_combo', '63', {}, [c('OnTrigger', 'kirito_branch', 'SetValue', '0'), c('OnTrigger', 'kirito_branch', 'SetValue', '1', 6.2)]);
     expect(inferCooldown(graphOf(ui, branch, relay, other), branch, 'OnTrue')?.seconds).toBe(12);
+  });
+});
+
+describe('counters: uses (announced, mode 3 / 4) or a value (mode 5)', () => {
+  it('counts uses when every press steps the counter by one', () => {
+    const button = mk('func_button', 'mine_btn', '100', {}, [c('OnPressed', 'mine_filter', 'TestActivator')]);
+    const filter = mk('filter_activator_name', 'mine_filter', '101', {}, [c('OnPass', 'mine_count', 'Add', '1'), c('OnPass', 'mine_relayfix', 'Disable'), c('OnPass', 'mine_relayfix', 'Enable', '', 5)]);
+    const relay = mk('logic_relay', 'mine_relayfix', '102', {}, [c('OnTrigger', 'mine_filter', 'TestActivator')]);
+    const counter = mk('math_counter', 'mine_count', '103', { min: '0', max: '6' }, [c('OnHitMax', 'mine_btn', 'Kill')]);
+    const g = graphOf(button, filter, relay, counter);
+    expect(counterUse(g, counter)).toMatchObject({ type: 'counterup', afterUses: null });
+    const s = suggestHandler(counter, g);
+    expect(s).toMatchObject({ type: 'counterup', mode: 3 });
+    expect(s.message).not.toBe(false);
+  });
+
+  it('writes mode 4 with the lock after the last use as the cooldown', () => {
+    const button = mk('func_button', 'electro_btn', '110', {}, [c('OnPressed', 'electro_filter', 'TestActivator')]);
+    const filter = mk('filter_activator_name', 'electro_filter', '111', {}, [c('OnPass', 'electro_count', 'Add', '1')]);
+    const counter = mk('math_counter', 'electro_count', '112', { min: '0', max: '3' }, [
+      c('OnHitMax', 'electro_btn', 'Lock'),
+      c('OnHitMax', '!self', 'SetValue', '0'),
+      c('OnHitMax', 'electro_btn', 'Unlock', '', 75),
+    ]);
+    const s = suggestHandler(counter, graphOf(button, filter, counter));
+    expect(s).toMatchObject({ type: 'counterup', mode: 4, cooldown: 75 });
+  });
+
+  it('keeps a charge a timer refills or a combo meter as a value (mode 5, not announced)', () => {
+    const button = mk('func_button', 'cast_btn', '120', {}, [c('OnPressed', 'cast_filter', 'TestActivator')]);
+    const filter = mk('filter_activator_name', 'cast_filter', '121', {}, [c('OnPass', 'charge', 'Subtract', '1')]);
+    const timer = mk('logic_timer', 'recharge', '122', { refiretime: '1' }, [c('OnTimer', 'charge', 'Add', '1')]);
+    const charge = mk('math_counter', 'charge', '123', { min: '0', max: '10' });
+    const g1 = graphOf(button, filter, timer, charge);
+    expect(counterUse(g1, charge)).toBeNull();
+    expect(suggestHandler(charge, g1)).toMatchObject({ mode: 5, message: false });
+
+    const skill = mk('logic_relay', 'skill_relay', '130', {}, [c('OnTrigger', 'combo', 'Add', '1'), c('OnTrigger', 'combo', 'Subtract', '1', 10)]);
+    const skillBtn = mk('func_button', 'skill_btn', '131', {}, [c('OnPressed', 'skill_relay', 'Trigger')]);
+    const combo = mk('math_counter', 'combo', '132', { min: '0', max: '3' }, [c('OnHitMax', 'ulti_btn', 'Unlock')]);
+    expect(counterUse(graphOf(skillBtn, skill, combo), combo)).toBeNull();
+
+    const bigSteps = mk('math_counter', 'ammo', '140', { min: '0', max: '30' });
+    const shoot = mk('filter_activator_name', 'shoot_filter', '141', {}, [c('OnPass', 'ammo', 'Subtract', '30')]);
+    const shootBtn = mk('func_button', 'shoot_btn', '142', {}, [c('OnPressed', 'shoot_filter', 'TestActivator')]);
+    expect(counterUse(graphOf(shootBtn, shoot, bigSteps), bigSteps)).toBeNull();
+  });
+});
+
+describe('an amount the use only checks is not the handler', () => {
+  it('follows GetValue → compare to the outcome that plants, not the "not enough sun" reply', () => {
+    const weapon = mk('weapon_p250', 'pea_weapon', '200');
+    const button = mk('func_button', 'pea_button', '201', { parentname: 'pea_weapon' }, [c('OnPressed', 'pea_filter', 'TestActivator')]);
+    const filter = mk('filter_activator_context', 'pea_filter', '202', {}, [c('OnPass', 'sun_counter', 'GetValue')]);
+    const sun = mk('math_counter', 'sun_counter', '203', { min: '0', max: '10000' }, [c('OnGetValue', 'pea_compare', 'SetValue'), c('OnGetValue', 'pea_compare', 'Compare', '', 0.01)]);
+    const collect = mk('filter_activator_context', 'sun_collect', '204', {}, [c('OnPass', 'sun_counter', 'Add', '25')]);
+    const compare = mk('logic_compare', 'pea_compare', '205', { comparevalue: '100' }, [c('OnLessThan', 'pea_not_ready', 'Trigger'), c('OnEqualTo', 'pea_ready', 'Trigger'), c('OnGreaterThan', 'pea_ready', 'Trigger')]);
+    const ready = mk('logic_relay', 'pea_ready', '206', {}, [c('OnTrigger', 'sun_counter', 'Subtract', '100'), c('OnTrigger', 'pea_button', 'Lock'), c('OnTrigger', 'pea_maker', 'ForceSpawn')]);
+    const notReady = mk('logic_relay', 'pea_not_ready', '207', {}, [c('OnTrigger', 'pea_model', 'Color', '255 0 0'), c('OnTrigger', 'sound_poor', 'StartSound')]);
+    const model = mk('prop_dynamic', 'pea_model', '208');
+    const sound = mk('point_soundevent', 'sound_poor', '209');
+    const maker = mk('env_entity_maker', 'pea_maker', '210');
+    const g = graphOf(weapon, button, filter, sun, collect, compare, ready, notReady, model, sound, maker);
+    const { item } = suggestItemForWeapon(weapon, g);
+    expect(item.handlers.map((h) => h.hammerid)).toEqual(['201', '206']);
+    expect(item.handlers[1]).toMatchObject({ event: 'OnTrigger', message: true });
   });
 });

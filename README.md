@@ -89,7 +89,7 @@ English summary is at the bottom.
 | `button`（フックのみ、event なし）+ `OnPass` のフィルタ | 559 アイテム | 武器に親付けされたボタンは `{"type":"button","hammerid":..}` のみ、メッセージと cooldown は後段のフィルタ / リレー側に付ける |
 | `button` + `OnPressed` 単独 | 333 | 後段が無ければボタン自身に event `OnPressed`, mode 2 |
 | `button` + `OnTrigger` のリレー | 223 | リレーは `OnTrigger` |
-| `button` + `counterdown` / `counterup` | 102 | `math_counter` は counter タイプ（`OnHitMin` があれば down、`OnHitMax` なら up） |
+| `button` + `counterdown` / `counterup` | 102 | `math_counter` は counter タイプ。使用ごとに 1 ずつ増減する counter は mode 3 / 4（下記「counter」） |
 | `OnEqualTo` (logic_compare), `OnUser1/4`, `OnTrue` (logic_branch), `OnCaseNN` | 54 / 46 / 15 / 5 | イベント推定の事前確率に反映 |
 | イベント系ハンドラは `type` を書かない | 1074 | 出力も同じ（CS2Fixes は未指定 = Other） |
 | mode 2 の cooldown | 60 秒が最頻、次いで 50 / 65 / 75 / 70 / 90 / 80 | 秒数はマップの配線から推定（下記） |
@@ -120,6 +120,15 @@ ui 自身は、後ろに何も無いときだけハンドラになります。
 GFL 設定はこの形のほとんどで後ろの relay を載せ、フィルタ自身が効果を持つときはフィルタを載せています。
 フィルタが自分だけで数える `math_counter`（そのアイテムの使用回数 / 弾数）を `Add` / `Subtract` するときは counter をハンドラにします
 （複数のアイテムのフィルタが数える共有 counter は除きます）。relay の cooldown は、手前のフィルタがボタンを Lock / Unlock する配線からも読みます。
+
+**counter**: CS2Fixes は mode 5（値の表示）の counter の使用をチャットに流しません。アイテムの使用（ボタン / game_ui から続く
+filter / relay）が 1 ずつ `Add` / `Subtract` し、タイマーや自分自身のループで増減せず、同じ所が後で戻しもしない counter は
+使用回数を数えているので mode 3（`Add` なら counterup、`Subtract` なら counterdown。回数は counter の min / max から）にし、
+クールダウンは手前の配線から読みます。上限で アイテムを Lock し N 秒後に戻す（counter の `SetValue 0` / `Unlock`）ものは mode 4、cooldown N。
+それ以外（タイマーで溜まるチャージ、30 ずつ減るゲージ、コンボメーター）は mode 5 / message false です。
+評価したマップでは GFL の mode 3 / 4 の counter 58 件中 57 件、mode 5 の 22 件すべてと一致します。
+使用が値を読むだけの counter（`GetValue` → compare：太陽が足りるか）はハンドラにせず、その先の compare の結果のうち
+アイテムを Lock する / クールダウンを持つ方を、色や音を返すだけの「足りない」側より優先します。
 
 **使用回数**: ハンドラ自身の出力が N 回しか発火しない（Hammer の Only once）ときは mode 3 / maxuses N にします。
 出力の無いボタンでも、アイテムのロジックが Lock / Unlock しているもの（ze_santassination_p）は +use のフックとして残します。
@@ -207,7 +216,7 @@ GFL がフックするボタンをフックしているか（CS2Fixes は button
 同じ使用で発火する相手があり余分なハンドラが無いか、チャット通知 / HUD 表示が同じか（mode 5 の counter は通知しません）、
 cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers。
 「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
-良くなったか確かめてください（2026-09 時点で、ゲーム内で同じ動き 59%、完全一致 45%）。
+良くなったか確かめてください（2026-09 時点で、ゲーム内で同じ動き 63%、完全一致 48%）。
 
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
@@ -294,6 +303,13 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   counters is replaced by those (as in most GFL configs); a filter with effects of its own stays, unless it counts an
   item-specific `math_counter`, which then reports the use. An output that fires only N times gives mode 3 / maxuses N.
   A button without outputs that the item's logic locks and unlocks is still the +use hook.
+- Counters: CS2Fixes never announces the uses of a counter in mode 5 (a value). A counter the item's use steps by one
+  (Add → counterup, Subtract → counterdown), not driven by a timer or a loop of its own and not stepped back by the same
+  source, counts uses: mode 3 with the cooldown read in front of it, or mode 4 when reaching the limit locks the item
+  and frees it N seconds later. Everything else (a charge a timer refills, a gauge stepped by 30, a combo meter) stays
+  mode 5 with message false. On the evaluated maps this matches 57 of the 58 counters GFL writes in mode 3 / 4 and all 22
+  in mode 5. A counter the use only reads (`GetValue` → compare: enough sun?) is not the handler; of the compare's
+  outcomes the one that locks the item / has a cooldown wins over a colour-and-sound "not ready" reply.
 - Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
   that is not a skybox and has the most entity data, not the biggest file.
 - Accuracy: `npm run evaluate -- <CS2-ZE-Configs/entwatch> <workshop/content/730 or map folders> --out eval` compares
@@ -302,7 +318,7 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   itself vs. a plain button hook plus the filter / relay behind it), and it checks that the buttons GFL hooks are hooked
   (CS2Fixes blocks other players' +use on them), every GFL handler has a counterpart firing on the same use and there
   are no extra ones, uses are announced / shown alike (a counter in mode 5 never announces), the cooldown is within 1 s
-  (2 s or less counts as none), the max uses and the triggers. Sept 2026: 59% behave the same in game, 45% are
+  (2 s or less counts as none), the max uses and the triggers. Sept 2026: 63% behave the same in game, 48% are
   identical; "What differs in game" lists the rest by kind. GFL's `"type": "counter"` / `"mode": 6` are not supported.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a

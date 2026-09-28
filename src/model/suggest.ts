@@ -2,7 +2,7 @@ import type { EntityGraph } from './graph';
 import { friendlyName, isWeaponEntity, type MapEntity } from './entity';
 import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entwatch';
 import { newHandler, newItem } from './entwatch';
-import { hasSelfCooldown, inferCooldown } from './cooldown';
+import { counterUse, hasSelfCooldown, inferCooldown } from './cooldown';
 import { suggestEvents } from './events';
 import { findSelectionTriggers, isKnife, stripsVia } from './triggers';
 import { HOOKABLE_TRIGGERS, abilityOutputs, hasUseOutput, isArmInput, isCounter, isFilter, isGameUi, isGate, isHousekeepingInput, isUseEntity, isUseLike, keyLabel } from './roles';
@@ -82,6 +82,10 @@ export interface HandlerSuggestion {
   eventReason?: string;
   maxuses?: number;
   maxusesReason?: string;
+  /** false when CS2Fixes would not print the use anyway (a counter shown as a value, mode 5). */
+  message?: boolean;
+  /** Why a counter counts uses (mode 3 / 4) or shows a value (mode 5). */
+  modeReason?: string;
 }
 
 /**
@@ -124,6 +128,30 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
       s.maxuses = limit.uses;
       s.maxusesReason = limit.reason;
       s.mode = 3;
+    }
+  } else if (graph) {
+    // a counter the use steps by one counts uses: CS2Fixes announces each in mode 3 / 4 (its max
+    // uses come from the counter's min / max); anything else is shown as a value (mode 5, silent)
+    const use = counterUse(graph, e);
+    if (use) {
+      s.type = use.type;
+      if (use.afterUses) {
+        s.mode = 4;
+        s.cooldown = use.afterUses.seconds;
+        s.cooldownReason = use.afterUses.reason;
+        s.modeReason = `counts uses (${use.reason}) and locks the item when they run out`;
+      } else {
+        s.mode = 3;
+        s.modeReason = `counts uses (${use.reason})`;
+        const cd = inferCooldown(graph, e, 'OutValue');
+        if (cd) {
+          s.cooldown = cd.seconds;
+          s.cooldownReason = cd.reason;
+        }
+      }
+    } else {
+      s.message = false;
+      s.modeReason = 'holds a charge or an amount (a timer, other steps than one per use): shown as a value, CS2Fixes prints no uses for it';
     }
   }
   return s;
@@ -320,6 +348,27 @@ function itemCounters(graph: EntityGraph, f: MapEntity): MapEntity[] {
 function isLockedAndUnlocked(graph: EntityGraph, e: MapEntity): boolean {
   const inputs = new Set(graph.incomingConnections(e).map(({ connection }) => connection.input.toLowerCase()));
   return inputs.has('lock') && inputs.has('unlock');
+}
+
+/** Gates that pick one outcome of the use (enough sun or not, the case for this level). */
+const CHOICE_CLASSES = new Set(['logic_compare', 'logic_branch', 'logic_case']);
+
+/** `e` locks / disables a button or other +use entity, or has cooldown wiring of its own. */
+function startsCooldown(graph: EntityGraph, e: MapEntity): boolean {
+  if (hasSelfCooldown(graph, e)) return true;
+  return e.connections.some((c) => /^(lock|disable)$/i.test(c.input) && graph.connectionTargets(e, c).some(isUseEntity));
+}
+
+const FEEDBACK_CLASSES = new Set([
+  'prop_dynamic', 'prop_dynamic_override', 'info_particle_system', 'env_sprite', 'env_sprite_clientside', 'point_worldtext', 'game_text',
+  'ambient_generic', 'point_soundevent', 'snd_event_point', 'env_fade', 'env_shake', 'env_screenoverlay', 'env_hudhint', 'env_instructor_hint',
+]);
+const FEEDBACK_INPUTS = new Set(['color', 'alpha', 'startsound', 'stopsound', 'playsound', 'setsourceentity', 'startglowing', 'stopglowing', 'setglowcolor', 'setmessage', 'setintmessage', 'display', 'showhudhint']);
+
+/** `e` only answers the player: flashes a model, plays a sound, shows a text. */
+function feedbackOnly(graph: EntityGraph, e: MapEntity): boolean {
+  const effects = e.connections.filter((c) => !isHousekeepingInput(c.input));
+  return effects.length > 0 && effects.every((c) => FEEDBACK_INPUTS.has(c.input.toLowerCase()) || graph.connectionTargets(e, c).every((t) => FEEDBACK_CLASSES.has(t.classname)));
 }
 
 /**
@@ -544,6 +593,24 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     }
     const fed = feeds(x, isUseLike) || c.fedVia === true;
     const selfCd = hasSelfCooldown(graph, x);
+    // a counter holding an amount the use only checks (GetValue → compare: enough sun to plant?) is
+    // not the ability, and CS2Fixes would not announce it: the use goes on through what it fires
+    if (isCounter(x) && !counterUse(graph, x)) {
+      const readOn = x.connections
+        .filter((k) => /^ongetvalue$/i.test(k.output) && !isHousekeepingInput(k.input))
+        .flatMap((k) => graph.connectionTargets(x, k))
+        .filter((t, i, all) => (isGate(t) || isFilter(t)) && all.indexOf(t) === i);
+      if (readOn.length > 0) {
+        skipped.push(`${label(x)} (math_counter holding an amount the use only checks; the use goes on through ${readOn.map(label).join(', ')})`);
+        for (const t of readOn) {
+          if (byId.has(t.id)) continue;
+          consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: fed || undefined });
+          const nc = byId.get(t.id);
+          if (nc) gateQueue.push(nc);
+        }
+        continue;
+      }
+    }
     const { role, passOn } = gateRole(graph, x);
     // a counter that only locks or kills things when it runs out is the item's use count
     if (role === 'chain-step' && !(isCounter(x) && c.fedVia)) {
@@ -551,9 +618,14 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       continue;
     }
     if (role === 'pass-through' && !selfCd) {
-      // the gate it hands the use to is the one that does something: judge that one instead
-      skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${passOn.map(label).join(', ')})`);
-      for (const t of passOn) {
+      // the gate it hands the use to is the one that does something: judge that one instead. Of
+      // the outcomes of a compare / branch, the one that locks the item or starts its cooldown is
+      // the ability; one that only flashes a model or plays a sound answers "not ready"
+      const ability = CHOICE_CLASSES.has(x.classname) ? passOn.filter((t) => startsCooldown(graph, t)) : [];
+      const replies = ability.length > 0 ? passOn.filter((t) => !ability.includes(t) && feedbackOnly(graph, t)) : [];
+      const next = passOn.filter((t) => !replies.includes(t));
+      skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${next.map(label).join(', ')}${replies.length > 0 ? `; ${replies.map(label).join(', ')} only answers "not ready"` : ''})`);
+      for (const t of next) {
         if (byId.has(t.id)) continue;
         consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: fed || undefined });
         const nc = byId.get(t.id);
@@ -639,6 +711,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       mode: s.mode,
       cooldown: s.cooldown ?? 0,
       maxuses: s.maxuses ?? 0,
+      ...(s.message === false ? { message: false } : {}),
       // CS2Fixes auto-detects templated entities from the _N name suffix; the only value worth
       // writing is "false" for a shared (non-templated) handler of a templated weapon
       templated: e.source.templated && !ent.source.templated ? false : undefined,
@@ -646,6 +719,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     item.handlers.push(h);
     notes.push(`handler ${label(ent)} (${s.type}${s.event ? ' ' + s.event : ''}): ${c.why}${extra ? '; ' + extra : ''}`);
     if (h.templated === false) notes.push(`templated=false: the weapon is spawned by a template but ${label(ent)} is a single map entity`);
+    if (s.modeReason) notes.push(`mode ${s.mode}: ${s.modeReason}`);
     if (s.eventReason && s.event) notes.push(`event ${s.event}: ${s.eventReason}`);
     if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
     if (s.maxusesReason) notes.push(`maxuses ${s.maxuses}: ${s.maxusesReason}`);
@@ -663,7 +737,11 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
 
   // When a filter / relay / counter handler follows the button, the button entry only needs to hook
   // +use (the GFL convention: {"type": "button", "hammerid": "..."}); messages come from the follow-up.
-  const hasFollowUp = item.handlers.some((h) => h.type !== 'button');
+  // A counter shown as a value announces nothing, so then the button keeps reporting the press.
+  const hasFollowUp = item.handlers.some((h) => h.type !== 'button' && h.message !== false);
+  if (item.handlers.some((h) => h.type === 'button') && !hasFollowUp && item.handlers.some((h) => h.type !== 'button')) {
+    notes.push('the handlers behind the button announce nothing (a counter shown as a value), so the button reports the press');
+  }
   if (hasFollowUp) {
     for (const h of item.handlers) {
       if (h.type !== 'button') continue;
