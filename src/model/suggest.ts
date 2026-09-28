@@ -85,13 +85,16 @@ export interface HandlerSuggestion {
 }
 
 /**
- * Uses allowed by the entity's own outputs: an output that fires only N times ("Only once" in
- * Hammer) caps the ability at N uses. Housekeeping outputs (Kill / Lock / Disable, ...) do not
- * count. The GFL configs write such items as mode 3 with maxuses N.
+ * Uses allowed by the entity's own outputs: when the output EntWatch watches (`event`) fires
+ * only N times ("Only once" in Hammer), the ability can be used N times. Housekeeping outputs
+ * (Kill / Lock / Disable, ...) and other outputs (a one-off OnUser1 for a boss) do not count.
+ * The GFL configs write such items as mode 3 with maxuses N.
  */
-function fireLimit(e: MapEntity): { uses: number; reason: string } | null {
+function fireLimit(e: MapEntity, event: string | undefined): { uses: number; reason: string } | null {
+  if (!event) return null;
   let best: { uses: number; reason: string } | null = null;
   for (const c of e.connections) {
+    if (c.output.toLowerCase() !== event.toLowerCase()) continue;
     if (!(c.timesToFire > 0) || isHousekeepingInput(c.input)) continue;
     if (!best || c.timesToFire < best.uses) best = { uses: c.timesToFire, reason: `${c.output} → ${c.target} ${c.input} fires ${c.timesToFire === 1 ? 'only once' : `${c.timesToFire} times`}` };
   }
@@ -116,7 +119,7 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
       s.cooldownReason = cd.reason;
       if (s.mode === 1) s.mode = 2;
     }
-    const limit = fireLimit(e);
+    const limit = fireLimit(e, s.event);
     if (limit) {
       s.maxuses = limit.uses;
       s.maxusesReason = limit.reason;
