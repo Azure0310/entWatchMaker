@@ -138,8 +138,10 @@ table.io td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-a
 .item-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .item-row:hover { background: var(--bg3); }
 .item-row.selected { background: #1d2a3f; }
-.item-row .mini { opacity: 0; }
-.item-row:hover .mini { opacity: 1; }
+.item-row .mini { opacity: 0.55; }
+.item-row:hover .mini, .item-row.selected .mini { opacity: 1; }
+.btn.danger-btn { border-color: #6b2a2a; color: #ff9b9b; }
+.btn.danger-btn:hover { border-color: var(--err); color: var(--err); }
 .item-name { font-weight: 600; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.error { background: var(--err); }

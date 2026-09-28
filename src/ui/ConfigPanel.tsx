@@ -8,6 +8,7 @@ import {
   addEmptyItem,
   addHandler,
   autoAddAllWeapons,
+  clearConfig,
   duplicateItem,
   moveHandler,
   moveItem,
@@ -176,6 +177,21 @@ function ItemEditor({ item, issues }: { item: ItemConfig; issues: ValidationIssu
   const itemIssues = issues.filter((i) => !i.handlerUid);
   return (
     <div className="item-editor" data-testid="item-editor">
+      <div className="btn-row">
+        <button type="button" className="btn" onClick={() => duplicateItem(item.uid)}>
+          ⧉ {t('cfg.duplicate')}
+        </button>
+        <button
+          type="button"
+          className="btn danger-btn"
+          data-testid="delete-item"
+          onClick={() => {
+            if (window.confirm(t('cfg.deleteConfirm', { name: item.name || item.hammerid }))) removeItem(item.uid);
+          }}
+        >
+          ✕ {t('cfg.deleteItem')}
+        </button>
+      </div>
       <div className="grid">
         <label>
           {t('cfg.name')}
@@ -283,6 +299,18 @@ export function ConfigPanel({ issues }: { issues: ValidationIssue[] }) {
         <button type="button" className="btn" onClick={() => addEmptyItem()} data-testid="add-empty-item">
           + {t('cfg.newItem')}
         </button>
+        {config.items.length > 0 && (
+          <button
+            type="button"
+            className="btn"
+            data-testid="clear-all"
+            onClick={() => {
+              if (window.confirm(t('cfg.clearAllConfirm', { n: config.items.length }))) clearConfig();
+            }}
+          >
+            ✕ {t('cfg.clearAll')}
+          </button>
+        )}
         {map && map.stats.weapons > 0 && (
           <button
             type="button"
@@ -324,7 +352,7 @@ export function ConfigPanel({ issues }: { issues: ValidationIssue[] }) {
                 <button type="button" className="mini" onClick={(e) => { e.stopPropagation(); duplicateItem(item.uid); }} title={t('cfg.duplicate')}>
                   ⧉
                 </button>
-                <button type="button" className="mini danger" onClick={(e) => { e.stopPropagation(); removeItem(item.uid); }} title={t('cfg.delete')} data-testid="remove-item">
+                <button type="button" className="mini danger" onClick={(e) => { e.stopPropagation(); if (window.confirm(t('cfg.deleteConfirm', { name: item.name || item.hammerid }))) removeItem(item.uid); }} title={t('cfg.delete')} data-testid="remove-item">
                   ✕
                 </button>
               </div>
