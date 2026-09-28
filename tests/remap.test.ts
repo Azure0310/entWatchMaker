@@ -51,7 +51,7 @@ describe('hammerid remapping across map versions', () => {
     const g2 = new EntityGraph(bumpedMap(100).entities);
     const r = remapConfig(config, g2, hints);
     expect(r.unresolved).toEqual([]);
-    expect(r.config.items.map((i) => i.hammerid)).toEqual(['1301', '1401', '1500', '2102', '2201', '2300', '2500']);
+    expect(r.config.items.map((i) => i.hammerid)).toEqual(['1301', '1401', '1500', '2102', '2201', '2300', '2500', '2613', '2700', '2800', '2900']);
   });
 
   it('anchors unnamed entities to the item weapon and reports ambiguity', () => {

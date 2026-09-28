@@ -12,7 +12,8 @@ import { EntityGraph } from '../src/model/graph';
 import { friendlyName, type MapEntity } from '../src/model/entity';
 import { parseEntWatchConfig, type EntWatchConfig } from '../src/model/entwatch';
 import { suggestItemForWeapon } from '../src/model/suggest';
-import { classifyTrigger, distance, findSelectionTriggers, isKnife, origin } from '../src/model/triggers';
+import { classifyTrigger, findSelectionTriggers, isKnife } from '../src/model/triggers';
+import { distance, minDistance, minDistanceTo, origin, worldPositions } from '../src/model/position';
 import { inferCooldown } from '../src/model/cooldown';
 import { suggestEvents } from '../src/model/events';
 
@@ -29,9 +30,17 @@ const graph = new EntityGraph(map.entities);
 const config: EntWatchConfig | null = configPath ? parseEntWatchConfig(readFileSync(configPath, 'utf8')).config : null;
 
 const L = (e: MapEntity) => `${e.classname} ${friendlyName(e.targetname) || '(unnamed)'} #${e.hammerId}`;
-const pos = (e: MapEntity) => (origin(e) ? origin(e)!.map((n) => Math.round(n)).join(' ') : '?');
+const fmt = (p: readonly number[]) => p.map((n) => Math.round(n)).join(' ');
+/** Origin as stored, plus the world position(s) for entities in template lumps (local coordinates). */
+const pos = (e: MapEntity) => {
+  const o = origin(e);
+  if (!o) return '?';
+  const world = worldPositions(graph, e).filter((w) => w.via !== 'origin');
+  return world.length > 0 ? `${fmt(o)} (world: ${world.map((w) => `${fmt(w.position)} ${w.via}`).join(' | ')})` : fmt(o);
+};
+/** Distance between the world positions of two entities (smallest when either can spawn in several places). */
 const dist = (a: MapEntity, b: MapEntity) => {
-  const d = distance(origin(a), origin(b));
+  const d = minDistance(graph, a, b);
   return d === null ? '?' : `${Math.round(d)}u`;
 };
 const out: string[] = [];
@@ -60,11 +69,11 @@ function describeEntity(e: MapEntity, indent = '  '): void {
 }
 
 function neighbourhood(w: MapEntity, radius = 512, limit = 16): void {
-  const wp = origin(w);
-  if (!wp) return;
+  const wp = worldPositions(graph, w).map((p) => p.position);
+  if (wp.length === 0) return;
   const near = map.entities
     .filter((e) => e.id !== w.id && !['prop_static', 'light', 'light_spot', 'light_omni', 'env_cubemap', 'env_cubemap_box', 'info_overlay', 'env_sprite', 'worldspawn'].includes(e.classname))
-    .map((e) => ({ e, d: distance(origin(e), wp) }))
+    .map((e) => ({ e, d: minDistanceTo(graph, e, wp) }))
     .filter((x): x is { e: MapEntity; d: number } => x.d !== null && x.d <= radius)
     .sort((a, b) => a.d - b.d)
     .slice(0, limit);
@@ -125,8 +134,10 @@ if (config) {
       const info = classifyTrigger(graph, e);
       p(`  strips: ${info.strips ? info.strips.via : 'no'}`);
       if (info.teleportsTo) {
-        const d = distance(info.teleportsTo.position, origin(w));
-        p(`  teleports to: ${info.teleportsTo.position.map((n) => Math.round(n)).join(' ')} (${info.teleportsTo.via}) → ${d === null ? '?' : Math.round(d) + 'u'} from weapon`);
+        const wp = worldPositions(graph, w).map((q) => q.position);
+        const ds = info.teleportsTo.positions.flatMap((landing) => wp.map((q) => distance(landing, q))).filter((d): d is number => d !== null);
+        const d = ds.length > 0 ? Math.min(...ds) : null;
+        p(`  teleports to: ${info.teleportsTo.positions.map(fmt).join(' | ')} (${info.teleportsTo.via}) → ${d === null ? '?' : Math.round(d) + 'u'} from weapon`);
       } else p('  teleports to: no');
     }
     if (isKnife(w)) {

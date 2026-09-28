@@ -55,9 +55,18 @@ export interface ParsedMap {
 
 export const PREFAB_NAME_PREFIX = '[PR#]';
 
-/** Strips the "[PR#]" marker the compiler adds to prefab-instanced entity names. */
+/**
+ * Strips the decorations the compiler adds to entity names: the "[PR#]" marker on prefab
+ * instanced entities (any case) and the "&0000" instance suffix that point_templates with name
+ * fixup put on the entities of their child lump. References in the map (templateNN, outputs,
+ * filtername) use the undecorated name, so this is the form names are compared in.
+ */
 export function friendlyName(name: string): string {
-  return name.startsWith(PREFAB_NAME_PREFIX) ? name.slice(PREFAB_NAME_PREFIX.length) : name;
+  let s = name;
+  if (s.length >= PREFAB_NAME_PREFIX.length && s.slice(0, PREFAB_NAME_PREFIX.length).toUpperCase() === PREFAB_NAME_PREFIX) {
+    s = s.slice(PREFAB_NAME_PREFIX.length);
+  }
+  return s.replace(/&\d{4}$/, '');
 }
 
 export function isWeaponEntity(e: MapEntity): boolean {

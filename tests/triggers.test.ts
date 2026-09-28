@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildDemoMap } from '../src/model/demo';
 import { EntityGraph } from '../src/model/graph';
-import { classifyTrigger, findSelectionTriggers, isKnife } from '../src/model/triggers';
+import { classifyTrigger, findSelectionTriggers, isKnife, spawnsEntity } from '../src/model/triggers';
 import { suggestItemForWeapon } from '../src/model/suggest';
 
 describe('knife / class item triggers', () => {
@@ -16,9 +16,16 @@ describe('knife / class item triggers', () => {
     const strip = classifyTrigger(graph, byName('nazgul_strip'));
     expect(strip.strips?.via).toContain('player_weaponstrip');
     const tp = classifyTrigger(graph, byName('nazgul_tp'));
-    expect(tp.teleportsTo?.position).toEqual([5000, 5010, 0]);
+    expect(tp.teleportsTo?.positions).toEqual([[5000, 5010, 0]]);
     const relayTp = classifyTrigger(graph, byName('nazgul_tp2'));
     expect(relayTp.teleportsTo?.via).toContain('point_teleport');
+    // strips through a point_entity_finder that kills the found knife, and through a script relay
+    expect(classifyTrigger(graph, byName('dragon_strip')).strips?.via).toContain('point_entity_finder');
+    expect(classifyTrigger(graph, byName('h_item_3_t')).strips?.via).toContain('RunScriptInput');
+    expect(classifyTrigger(graph, byName('dragon_tele')).strips).toBeNull();
+    // a teleport that ForceSpawns the maker of the knife's template
+    expect(spawnsEntity(graph, byName('ww_tele'), byName('[PR#]ww_knife&0000'))?.via).toContain('ForceSpawn');
+    expect(spawnsEntity(graph, byName('ww_tele'), byName('dragon_knife'))).toBeNull();
   });
 
   it('finds the strip zone on the knife and the teleports landing there, not the spawn strip', () => {
@@ -28,6 +35,11 @@ describe('knife / class item triggers', () => {
     expect(ids).toContain('2403'); // trigger_teleport whose destination is on the knife
     expect(ids).toContain('2405'); // trigger_multiple firing a point_teleport onto the strip zone
     expect(ids).not.toContain('2410'); // spawn strip far away
+    // templated knife: positions come from the maker, the ForceSpawn teleport is listed first
+    expect(findSelectionTriggers(graph, byName('[PR#]ww_knife&0000')).map((s) => s.trigger.hammerId)).toEqual(['2502', '2515']);
+    // landings go to the nearest knife only
+    expect(findSelectionTriggers(graph, byName('dragon_knife')).map((s) => s.trigger.hammerId)).toEqual(['2610', '2611']);
+    expect(findSelectionTriggers(graph, byName('giant_knife')).map((s) => s.trigger.hammerId)).toEqual(['2704']);
   });
 
   it('adds them to the item and keeps the ability relay', () => {

@@ -63,7 +63,9 @@ describe('graph + suggestions on the demo map', () => {
     const { item } = suggestItemForWeapon(heal, graph);
     expect(item.color).toBe('white');
     expect(item.handlers.some((h) => h.hammerid === '1401' && h.type === 'button')).toBe(true);
-    expect(item.handlers.some((h) => h.hammerid === '1402' && h.event === 'PressedAttack')).toBe(true);
+    // the relay behind PressedAttack reports the use; the game_ui itself is not repeated as a handler
+    expect(item.handlers.some((h) => h.hammerid === '1403' && h.event === 'OnTrigger')).toBe(true);
+    expect(item.handlers.some((h) => h.hammerid === '1402')).toBe(false);
   });
 
   it('names items from targetnames', () => {
@@ -105,11 +107,13 @@ describe('cooldown inference from Lock/Unlock wiring', () => {
     expect(item.handlers.find((h) => h.hammerid === '1202')!.cooldown).toBe(0);
   });
 
-  it('reads the delayed Enable of a relay behind a game_ui handler', () => {
+  it('reads the delayed Enable of the relay behind a game_ui', () => {
     const { item } = suggestItemForWeapon(byName('heal_weapon'), graph);
-    const ui = item.handlers.find((h) => h.hammerid === '1402')!;
-    expect(ui.cooldown).toBe(60);
-    expect(ui.mode).toBe(2);
+    const relay = item.handlers.find((h) => h.hammerid === '1403')!;
+    expect(relay.cooldown).toBe(60);
+    expect(relay.mode).toBe(2);
+    // asked directly, the game_ui inherits the relay's cooldown too
+    expect(inferCooldown(graph, byName('heal_ui'))?.seconds).toBe(60);
   });
 
   it('falls back to the button wait key and leaves counters alone', () => {
