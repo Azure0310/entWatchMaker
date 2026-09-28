@@ -66,13 +66,14 @@ select { background: var(--bg); border: 1px solid var(--line); border-radius: 6p
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.workspace { flex: 1; display: grid; grid-template-columns: 300px minmax(380px, 1fr) minmax(420px, 560px); gap: 8px; padding: 8px; min-height: 0; }
+.workspace { flex: 1; display: grid; grid-template-columns: 320px minmax(360px, 1fr) minmax(420px, 560px); gap: 8px; padding: 8px; min-height: 0; }
 .col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
 .panel { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .panel-head { padding: 8px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
 .panel-head.row { flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; }
 .panel-body { flex: 1; overflow: auto; min-height: 0; }
-.entity-list { flex: 1; }
+.entity-list { flex: 1 1 50%; }
+.items-panel { flex: 1 1 50%; }
 .tree-panel { flex: 1 1 45%; }
 .inspector { flex: 1 1 55%; }
 .config-panel { flex: 1 1 55%; }
@@ -133,23 +134,17 @@ table.io td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-a
 .chip-id { color: var(--muted); }
 .chips { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 4px; }
 
-.config-body { display: flex; flex-direction: column; overflow: hidden; }
-/* The item list and the editor scroll independently; the list keeps its height (draggable) instead of
-   being squeezed to nothing by a tall editor. */
-.item-list { position: relative; flex: 0 0 auto; min-height: 64px; max-height: calc(100% - 158px); overflow: auto; border-bottom: 1px solid var(--line); }
-.item-list.fill { flex: 1 1 auto; min-height: 0; max-height: none; border-bottom: 0; }
-.splitter { flex: 0 0 8px; display: flex; align-items: center; justify-content: center; cursor: row-resize; touch-action: none; user-select: none; border-bottom: 1px solid var(--line); }
-.splitter::before { content: ''; width: 40px; height: 3px; border-radius: 2px; background: var(--line); }
-.splitter:hover::before, .splitter.dragging::before { background: var(--accent); }
-.item-detail { flex: 1 1 0; min-height: 0; overflow: auto; }
-.item-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.item-list { position: relative; }
+.item-row { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .item-row:hover { background: var(--bg3); }
 .item-row.selected { background: #1d2a3f; box-shadow: inset 3px 0 0 var(--accent); }
 .item-row .mini { opacity: 0.55; flex-shrink: 0; }
+.item-row .mini.aux { opacity: 0; }
 .item-row:hover .mini, .item-row.selected .mini { opacity: 1; }
-.item-index { width: 16px; text-align: right; flex-shrink: 0; }
+.item-index { width: 14px; text-align: right; flex-shrink: 0; }
 .item-name { font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-row .mono, .item-row .item-meta, .item-row .dot { flex-shrink: 0; }
+.ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn.danger-btn { border-color: #6b2a2a; color: #ff9b9b; }
 .btn.danger-btn:hover { border-color: var(--err); color: var(--err); }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
