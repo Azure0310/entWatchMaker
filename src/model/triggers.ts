@@ -1,7 +1,7 @@
 import type { EntityGraph } from './graph';
 import { friendlyName, isWeaponEntity, type MapEntity } from './entity';
 import { HOOKABLE_TRIGGERS, causedOutputs } from './roles';
-import { distance, minDistanceTo, origin, spawnersOf, templateOf, worldPositions, type Vec3 } from './position';
+import { distance, minDistanceTo, spawnersOf, templateOf, worldPositions, type Vec3 } from './position';
 
 export { distance, origin } from './position';
 
@@ -39,16 +39,6 @@ export function isStripInput(e: MapEntity, input: string, param: string): boolea
 function label(e: MapEntity): string {
   const name = friendlyName(e.targetname);
   return name ? `${name} (${e.classname})` : e.classname;
-}
-
-const SPAWN_CLASSES = new Set(['info_player_counterterrorist', 'info_player_terrorist', 'info_player_start', 'info_deathmatch_spawn', 'info_armsrace_counterterrorist', 'info_armsrace_terrorist']);
-
-/** Round-start strips sit on the spawns; they are never an item's trigger. */
-function nearSpawn(graph: EntityGraph, e: MapEntity, radius = 384): boolean {
-  const spawns = graph.entities.filter((s) => SPAWN_CLASSES.has(s.classname)).map(origin).filter((p): p is Vec3 => p !== null);
-  if (spawns.length === 0) return false;
-  const d = minDistanceTo(graph, e, spawns);
-  return d !== null && d <= radius;
 }
 
 /**
@@ -130,14 +120,37 @@ export interface SelectionTrigger {
 }
 
 /**
- * Triggers that hand out the item: ones that spawn its template, strip zones on the item, and
- * teleports that land on it (or on that strip zone). A landing belongs to the nearest weapon
- * only, so the teleport of the item next door is not picked up. Radii are generous because
- * brush entity origins are their centres, not their edges.
+ * How the map itself ties a trigger to the weapon, as opposed to merely placing it nearby: the
+ * trigger is compiled into the weapon's template lump, parented to it, or fired at by its
+ * OnPlayerPickup (usually a Kill once the item is taken). Null when nothing ties them.
  */
-export function findSelectionTriggers(graph: EntityGraph, weapon: MapEntity, opts: { stripRadius?: number; teleportRadius?: number } = {}): SelectionTrigger[] {
+export function tiedToWeapon(graph: EntityGraph, trig: MapEntity, weapon: MapEntity): string | null {
+  if (weapon.source.templated && trig.source.templated && trig.source.container === weapon.source.container && trig.source.file === weapon.source.file) {
+    return `in the knife's template lump ${weapon.source.container}`;
+  }
+  if (graph.relationsOf(trig).some((r) => r.kind === 'parent' && r.other.id === weapon.id)) return 'parented to the knife';
+  for (const c of weapon.connections) {
+    if (!/^onplayerpickup$/i.test(c.output)) continue;
+    if (graph.connectionTargets(weapon, c).some((t) => t.id === trig.id)) return `the knife's OnPlayerPickup → ${c.input}`;
+  }
+  return null;
+}
+
+/**
+ * Triggers that hand out the item: ones that spawn its template, strip zones the map ties to the
+ * item (see tiedToWeapon; a strip zone that is merely nearby belongs to a round start or to the
+ * item next door), and teleports that land on it (or on that strip zone). A landing belongs to
+ * the nearest weapon only, so the teleport of the item next door is not picked up. The GFL
+ * configs list landings within a few dozen units of the knife and none further than 64.
+ */
+export function findSelectionTriggers(
+  graph: EntityGraph,
+  weapon: MapEntity,
+  opts: { stripRadius?: number; teleportRadius?: number; onTopRadius?: number } = {},
+): SelectionTrigger[] {
   const stripRadius = opts.stripRadius ?? 256;
-  const teleportRadius = opts.teleportRadius ?? 384;
+  const teleportRadius = opts.teleportRadius ?? 64;
+  const onTopRadius = opts.onTopRadius ?? 32;
   const wpos = worldPositions(graph, weapon).map((p) => p.position);
   if (wpos.length === 0) return [];
   const out: SelectionTrigger[] = [];
@@ -159,11 +172,26 @@ export function findSelectionTriggers(graph: EntityGraph, weapon: MapEntity, opt
   const stripZones: MapEntity[] = [];
   for (const info of infos) {
     if (!info.strips) continue;
-    if (nearSpawn(graph, info.trigger)) continue; // round-start strip on the spawns
-    const d = minDistanceTo(graph, info.trigger, wpos);
-    if (d !== null && d <= stripRadius) {
+    const tie = tiedToWeapon(graph, info.trigger, weapon);
+    if (!tie) continue;
+    stripZones.push(info.trigger);
+    out.push({ trigger: info.trigger, reason: `strip zone ${tie} (${info.strips.via})` });
+  }
+  if (stripZones.length === 0) {
+    // nothing tied: a strip zone sitting right on the knife, and nearer to it than to any other
+    // weapon, is its own too (maps that place items and their strip zones by hand)
+    for (const info of infos) {
+      if (!info.strips) continue;
+      const d = minDistanceTo(graph, info.trigger, wpos);
+      if (d === null || d > onTopRadius) continue;
+      const zone = worldPositions(graph, info.trigger).map((p) => p.position);
+      const closerWeapon = otherWeapons.some((o) => {
+        const od = minDistanceTo(graph, o, zone);
+        return od !== null && od + 16 < d;
+      });
+      if (closerWeapon) continue;
       stripZones.push(info.trigger);
-      out.push({ trigger: info.trigger, reason: `strip zone ${Math.round(d)} units from the knife (${info.strips.via})` });
+      out.push({ trigger: info.trigger, reason: `strip zone ${Math.round(d)} units above the knife (${info.strips.via})` });
     }
   }
   for (const info of infos) {

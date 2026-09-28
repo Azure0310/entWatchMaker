@@ -39,8 +39,9 @@ describe('game_ui implemented as a logic_case script', () => {
     expect(notes.some((n) => n.includes('dragon_phbox') && n.includes('housekeeping'))).toBe(true);
     expect(notes.some((n) => n.includes('dragon_knife_filter_a') && n.includes('no outputs'))).toBe(true);
     expect(notes.some((n) => n.startsWith('game_ui dragon_ui'))).toBe(true);
-    // strip zone through the point_entity_finder and the selection teleport; not the giant's teleport
-    expect([...item.triggers].sort()).toEqual(['2610', '2611']);
+    // the selection teleport; not the giant's teleport, and not the knife-removal trigger_once above
+    // the knife: nothing ties it to the knife (like skyrim, where GFL lists only the teleport)
+    expect([...item.triggers].sort()).toEqual(['2611']);
     expect(validateConfig({ items: [item] }, graph).filter((i) => i.level === 'error')).toEqual([]);
   });
 
