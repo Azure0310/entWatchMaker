@@ -297,6 +297,29 @@ function filterPassOn(graph: EntityGraph, f: MapEntity): MapEntity[] | null {
 }
 
 /**
+ * Counters the filter adds to / subtracts from that no other filter counts: the item's own use
+ * or ammo count. A counter shared by several items' filters (a combo meter) is not.
+ */
+function itemCounters(graph: EntityGraph, f: MapEntity): MapEntity[] {
+  const out: MapEntity[] = [];
+  for (const c of f.connections) {
+    if (!/^(add|subtract)$/i.test(c.input)) continue;
+    for (const t of graph.connectionTargets(f, c)) {
+      if (!isCounter(t) || out.includes(t)) continue;
+      const shared = graph.incomingConnections(t).some(({ from, connection }) => from.id !== f.id && isFilter(from) && !isHousekeepingInput(connection.input));
+      if (!shared) out.push(t);
+    }
+  }
+  return out;
+}
+
+/** True when something locks `e` and something unlocks it again (a gated button). */
+function isLockedAndUnlocked(graph: EntityGraph, e: MapEntity): boolean {
+  const inputs = new Set(graph.incomingConnections(e).map(({ connection }) => connection.input.toLowerCase()));
+  return inputs.has('lock') && inputs.has('unlock');
+}
+
+/**
  * Builds an item entry for a weapon entity and proposes handlers from related entities.
  *
  * Candidates come from, in order of confidence:
@@ -441,7 +464,9 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   for (const c of byOrder) {
     const x = c.entity;
     if (!isUseEntity(x) || !x.hammerId) continue;
-    if (!hasUseOutput(x)) {
+    // a button that fires nothing itself but is locked and unlocked by the item's logic is still
+    // the +use the item is gated on (ze_santassination_p: the game_ui locks it for the cooldown)
+    if (!hasUseOutput(x) && !(!isGameUi(x) && isLockedAndUnlocked(graph, x))) {
       const outs = [...new Set(x.connections.map((k) => k.output))];
       skipped.push(`${label(x)} (${x.classname}, using it fires nothing${outs.length > 0 ? `; only ${outs.join('/')} housekeeping` : '; no outputs'})`);
       continue;
@@ -477,6 +502,21 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
         }
         continue;
       }
+      // a counter only this filter counts (uses / ammo of this item) reports the use better than
+      // the filter: the GFL configs list the counter (21 of 27 such chains)
+      const counters = itemCounters(graph, x);
+      if (counters.length > 0) {
+        skipped.push(`${label(x)} (filter counted by ${counters.map(label).join(', ')}, which reports the use)`);
+        for (const t of counters) {
+          consider(t, `counts ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: true });
+          const nc = byId.get(t.id);
+          if (nc) {
+            nc.fedVia = true;
+            if (!behindFilters.includes(nc)) behindFilters.push(nc);
+          }
+        }
+        continue;
+      }
       included.add(x.id);
       chosen.push({ c });
     } else skipped.push(`${label(x)} (filter, not fed by a button)`);
@@ -502,7 +542,8 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     const fed = feeds(x, isUseLike) || c.fedVia === true;
     const selfCd = hasSelfCooldown(graph, x);
     const { role, passOn } = gateRole(graph, x);
-    if (role === 'chain-step') {
+    // a counter that only locks or kills things when it runs out is the item's use count
+    if (role === 'chain-step' && !(isCounter(x) && c.fedVia)) {
       skipped.push(`${label(x)} (${x.classname}, only arms or disarms other logic: a step of a key combo, not an ability)`);
       continue;
     }
