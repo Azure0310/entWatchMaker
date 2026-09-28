@@ -140,6 +140,18 @@ npm run build         # dist/ に静的サイトを出力
 npm run build:single  # release/entwatchmaker.html（全部入りの 1 ファイル）を生成
 ```
 
+### コマンドラインで解析する（Node.js がある PC 向け）
+
+```bash
+# 全エンティティを JSON に書き出す（UI の「エンティティ一覧を書き出す」と同じ形式）
+npm run dump:entities -- "C:\Program Files (x86)\Steam\steamapps\workshop\content\730\3242492031" out.json
+
+# 既存の jsonc とツールの推定を武器ごとに突き合わせ、ハンドラ / トリガーの配線と周辺エンティティをレポートする
+npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] [--all] > report.md
+```
+
+`diagnose` は推定に失敗したマップを調べるためのもので、「ツールの提案 vs 設定」「設定のハンドラ / トリガーがどのエンティティで、誰に撃たれ、何を撃つか」「武器の周囲 512 ユニットにあるもの」を出します。
+
 ### 構成
 
 | パス | 内容 |
@@ -154,6 +166,7 @@ npm run build:single  # release/entwatchmaker.html（全部入りの 1 ファイ
 | `src/model/entwatch.ts` | jsonc のシリアライズ / パース |
 | `src/model/validate.ts` | 設定の検証 |
 | `src/ui/` | React UI（日本語 / English） |
+| `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート） |
 
 パーサは [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat) と
 [Datamodel.NET](https://github.com/ValveResourceFormat/Datamodel.NET) の実装を参照して書き、
