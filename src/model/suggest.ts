@@ -80,6 +80,22 @@ export interface HandlerSuggestion {
   cooldown?: number;
   cooldownReason?: string;
   eventReason?: string;
+  maxuses?: number;
+  maxusesReason?: string;
+}
+
+/**
+ * Uses allowed by the entity's own outputs: an output that fires only N times ("Only once" in
+ * Hammer) caps the ability at N uses. Housekeeping outputs (Kill / Lock / Disable, ...) do not
+ * count. The GFL configs write such items as mode 3 with maxuses N.
+ */
+function fireLimit(e: MapEntity): { uses: number; reason: string } | null {
+  let best: { uses: number; reason: string } | null = null;
+  for (const c of e.connections) {
+    if (!(c.timesToFire > 0) || isHousekeepingInput(c.input)) continue;
+    if (!best || c.timesToFire < best.uses) best = { uses: c.timesToFire, reason: `${c.output} → ${c.target} ${c.input} fires ${c.timesToFire === 1 ? 'only once' : `${c.timesToFire} times`}` };
+  }
+  return best;
 }
 
 /**
@@ -99,6 +115,12 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
       s.cooldown = cd.seconds;
       s.cooldownReason = cd.reason;
       if (s.mode === 1) s.mode = 2;
+    }
+    const limit = fireLimit(e);
+    if (limit) {
+      s.maxuses = limit.uses;
+      s.maxusesReason = limit.reason;
+      s.mode = 3;
     }
   }
   return s;
@@ -572,7 +594,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
       mode: s.mode,
       cooldown: s.cooldown ?? 0,
-      maxuses: 0,
+      maxuses: s.maxuses ?? 0,
       // CS2Fixes auto-detects templated entities from the _N name suffix; the only value worth
       // writing is "false" for a shared (non-templated) handler of a templated weapon
       templated: e.source.templated && !ent.source.templated ? false : undefined,
@@ -582,6 +604,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     if (h.templated === false) notes.push(`templated=false: the weapon is spawned by a template but ${label(ent)} is a single map entity`);
     if (s.eventReason && s.event) notes.push(`event ${s.event}: ${s.eventReason}`);
     if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
+    if (s.maxusesReason) notes.push(`maxuses ${s.maxuses}: ${s.maxusesReason}`);
   }
   if (isKnife(e)) {
     if (selection.length === 0) notes.push('knife item: no strip zone tied to it, teleport landing (within 64 units) or template spawner for it was found');
