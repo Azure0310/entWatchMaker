@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:single": "npm run build && node scripts/build-single.mjs",
     "dump:entities": "tsx scripts/dump-entities.ts",
-    "diagnose": "tsx scripts/diagnose.ts"
+    "diagnose": "tsx scripts/diagnose.ts",
+    "evaluate": "tsx scripts/evaluate.ts"
   },
   "dependencies": {
     "fzstd": "^0.1.1",

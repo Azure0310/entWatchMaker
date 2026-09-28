@@ -15,6 +15,8 @@ English summary is at the bottom.
   - Workshop `.vpk`（単体、または `_dir.vpk` + `_000.vpk`… の分割形式）— 中の `*.vents_c`（エンティティランプ）を直接解析します。
     Workshop のアイテム（`steamapps\workshop\content\730\<ID>\<ID>.vpk`）はアドオン vpk の中に `maps/<マップ名>.vpk` が
     入れ子になっていますが、入れ子の vpk も（メモリに展開せず）そのまま辿ります。
+    パッケージに複数のマップ（3D スカイボックスや `maps/stages/` のステージ用マップ）があるときは、
+    `maps/` 直下でスカイボックスでないもののうちエンティティの多いマップを読みます（ze_castlevania など、ステージ用マップの方がファイルが大きいことがあります）。
     `point_template` の子ランプも読むので、テンプレートで生成される武器も一覧に出ます（`T` バッジ）。
   - Hammer `.vmap`（DMX binary 9）— プレハブの `.vmap` を一緒にドロップすると、プレハブ内のエンティティも
     `プレハブのnodeID:エンティティのnodeID` 形式の hammerid で取り込みます。
@@ -109,6 +111,15 @@ game_ui として扱います。武器の `OnPlayerPickup → Activate` から u
 リレー / compare / counter をハンドラにします。キーが 2 つ以上あるときはハンドラの `name` にキー名（`Attack` / `Attack2` / `Forward` …）を入れます。
 ui 自身は、後ろに何も無いときだけハンドラになります。
 
+**フィルタの後ろ**: ボタン → フィルタ → relay / counter の鎖では、フィルタが使用者を確かめて後ろの relay / case / counter に
+渡すだけ（ボタンの `Lock` / `Unlock` のような後始末を除いて効果を持たない）なら、後ろの relay などをハンドラにします。
+GFL 設定はこの形のほとんどで後ろの relay を載せ、フィルタ自身が効果を持つときはフィルタを載せています。
+フィルタが自分だけで数える `math_counter`（そのアイテムの使用回数 / 弾数）を `Add` / `Subtract` するときは counter をハンドラにします
+（複数のアイテムのフィルタが数える共有 counter は除きます）。relay の cooldown は、手前のフィルタがボタンを Lock / Unlock する配線からも読みます。
+
+**使用回数**: ハンドラ自身の出力が N 回しか発火しない（Hammer の Only once）ときは mode 3 / maxuses N にします。
+出力の無いボタンでも、アイテムのロジックが Lock / Unlock しているもの（ze_santassination_p）は +use のフックとして残します。
+
 **ハンドラにしないもの**: `Kill` / `Disable` / `Enable` / `Deactivate` / `CancelPending` / `Lock` / `Unlock` などの後始末入力は
 「ボタンから撃たれている」に数えません。`OnBreak` しか撃たない physbox（当たり判定）、出力の無い filter（ナイフ除去用の部品）、
 他のロジックを Enable / Disable するだけの relay（キーコンボの段）、他の relay に `Trigger` するだけの relay（先の relay を代わりに判定）、
@@ -123,10 +134,14 @@ strip を撃つ relay、ボタンから撃たれていない logic_timer は候�
 「アイテムの上の strip ゾーン」と「そこへ飛ばすテレポート」で配られます。どちらも武器と名前でつながっていないので、
 `weapon_knife*` / `weapon_bayonet` のときは次を `triggers` 候補にします。
 - 武器のテンプレートを `ForceSpawn` する trigger（env_entity_maker 経由も含む）
-- 武器の周囲 256 ユニット以内の strip ゾーン。strip の判定は `player_weaponstrip` / `game_player_equip`、
-  `point_script` への `RunScriptInput "*Strip*"`、`point_entity_finder` の `FindEntity`（`OnFoundEntity → Kill`）
-- 着地点（`trigger_teleport` の `target`、または `point_teleport`）が武器から 384 ユニット以内、または strip ゾーンの上にあるテレポート。
-  着地点は **最も近い武器にだけ** 割り当てるので、隣のアイテムのテレポートは付きません
+- マップが武器に結び付けている strip ゾーン: 武器と同じテンプレート lump にある、武器に親付けされている、
+  または武器の `OnPlayerPickup` の送り先（拾ったら Kill するもの）。結び付いたものが無いときだけ、武器の真上
+  32 ユニット以内にあって他の武器より近い strip ゾーンも入れます。位置が近いだけの strip ゾーン（ラウンド開始時の strip や
+  隣のアイテムのもの）は付けません（GFL 設定は結び付いた strip ゾーンの 136 / 139 を載せ、隣のアイテム寄りのものは 1 つも載せていません）。
+  strip の判定は `player_weaponstrip` / `game_player_equip`、`point_script` への `RunScriptInput "*Strip*"`、
+  `point_entity_finder` の `FindEntity`（`OnFoundEntity → Kill`）
+- 着地点（`trigger_teleport` の `target`、または `point_teleport`）が武器から 64 ユニット以内、または strip ゾーンの上にあるテレポート。
+  着地点は **最も近い武器にだけ** 割り当てるので、隣のアイテムのテレポートは付きません（GFL 設定の着地点はどれも数十ユニット以内です）
 ヘッダの「エンティティ一覧を書き出す」で全エンティティを JSON 保存できるので、推定がうまくいかないマップはそのファイルで配線を確認できます。
 
 **I/O 検索**: 中央上のタブでマップ内の全接続を検索できます（例: `in:unlock`、`out:onpressed`、`from:materia`、`class:filter`、遅延ありのみ）。
@@ -172,6 +187,18 @@ npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] 
 
 `diagnose` は推定に失敗したマップを調べるためのもので、「ツールの提案 vs 設定」「設定のハンドラ / トリガーがどのエンティティで、誰に撃たれ、何を撃つか」「武器の周囲 512 ユニットにあるもの」を出します。テンプレート内のエンティティは、ローカル座標に加えてワールド座標も表示します。
 
+```bash
+# GFL の設定と照合して推定の精度を測る（Workshop フォルダを丸ごと指定できる）
+npm run evaluate -- <CS2-ZE-Configs/entwatch> "C:\Program Files (x86)\Steam\steamapps\workshop\content\730" --out eval
+```
+
+`evaluate` は、読み込めたマップのうち同名の GFL 設定があるものについて、設定の各アイテムでツールの提案と
+ハンドラ / トリガーの hammerid、type / event / mode / cooldown / maxuses を突き合わせ、`eval/report.md`（全体とマップ別の一致率）、
+`eval/details.md`（一致しなかったアイテムごとの差分）、`eval/results.json` を書き出します。複数のマップを含むパッケージでは
+設定と同名のマップを使い、ローダー単体なら別のマップを読む場合はレポートに出します。ヒューリスティクスを変えたときは
+この数字で良くなったか確かめてください（アイテムが完全一致する割合は 2026-09 時点で約 41%。残りの多くは、同じ配線でも
+ボタン単独で数えるかボタン + 後段で数えるかといった設定作者ごとの書き方の違いです）。
+
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
 ツールが再現できるかを採点します（無ければスキップ）。ヒューリスティクスを変えたときの回帰確認に使います。
@@ -190,7 +217,7 @@ npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] 
 | `src/model/entwatch.ts` | jsonc のシリアライズ / パース |
 | `src/model/validate.ts` | 設定の検証 |
 | `src/ui/` | React UI（日本語 / English） |
-| `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート） |
+| `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート）, `evaluate.ts`（GFL 設定との一致率） |
 
 パーサは [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat) と
 [Datamodel.NET](https://github.com/ValveResourceFormat/Datamodel.NET) の実装を参照して書き、
@@ -211,6 +238,9 @@ push で `.github/workflows/pages.yml` がビルドして公開します。
 - `KeyValues origin` で位置を変えながら 1 つのテンプレートを何度も ForceSpawn するマップでは、テンプレート内の武器の位置は
   最初の maker / テンプレートの位置としてしか計算できません。
 - ハンドラの推定はあくまで雛形です。マップごとの仕様（cooldown 秒数、maxuses など）は必ず確認してください。
+- 同じ配線でも、ボタン単独を mode 2 / 3 で数える書き方と、ボタンはフックだけで後段のフィルタ / relay を数える書き方が
+  設定作者ごとに混在しています。ツールは多数派（後者）で出します。
+- 一部の GFL 設定が使う `"type": "counter"` / `"mode": 6` には対応していません（読み込むと other / mode 1 になります）。
 
 ---
 
@@ -243,8 +273,19 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   Entities in `NNN#entityLumpName` lumps get world positions (env_entity_maker or point_template origin + local origin) and
   the `[PR#]` / `&0000` name decorations are ignored when resolving names. Knife items get `triggers` from the trigger that
   ForceSpawns their template, strip zones (`player_weaponstrip`, `point_script RunScriptInput "*Strip*"`,
-  `point_entity_finder` → Kill) within 256 units and teleports landing within 384 units, each landing assigned to the
-  nearest weapon only.
+  `point_entity_finder` → Kill) the map ties to the knife (same template lump, parented to it, or fired at by its
+  `OnPlayerPickup`; failing that, a zone within 32 units on top of it) and teleports landing within 64 units, each
+  landing assigned to the nearest weapon only.
+- Button → filter → relay / counter: a filter that only checks the user and hands the use on to relays / cases /
+  counters is replaced by those (as in most GFL configs); a filter with effects of its own stays, unless it counts an
+  item-specific `math_counter`, which then reports the use. An output that fires only N times gives mode 3 / maxuses N.
+  A button without outputs that the item's logic locks and unlocks is still the +use hook.
+- Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
+  that is not a skybox and has the most entity data, not the biggest file.
+- Accuracy: `npm run evaluate -- <CS2-ZE-Configs/entwatch> <workshop/content/730 or map folders> --out eval` compares
+  the suggestions with the GFL configs of every map it can load (report.md, details.md, results.json). About 41% of
+  the items come out identical (Sept 2026); most of the rest differ in per-author style (counting the button itself vs.
+  a plain button hook plus the filter / relay behind it). GFL's `"type": "counter"` / `"mode": 6` are not supported.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.
