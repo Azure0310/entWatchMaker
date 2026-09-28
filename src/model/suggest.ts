@@ -256,6 +256,25 @@ function gateRole(graph: EntityGraph, x: MapEntity): { role: 'chain-step' | 'pas
 }
 
 /**
+ * The relays / cases / counters a filter hands the use on to, when that is all it does: every
+ * non-housekeeping output lands on logic. Null when the filter has effects of its own (then it is
+ * the ability and the gates behind it only repeat its event).
+ */
+function filterPassOn(graph: EntityGraph, f: MapEntity): MapEntity[] | null {
+  const passOn: MapEntity[] = [];
+  for (const c of f.connections) {
+    if (isHousekeepingInput(c.input)) continue;
+    for (const t of graph.connectionTargets(f, c)) {
+      if (t.id === f.id) continue;
+      if (!(isGate(t) || isCounter(t) || isFilter(t)) || isGameUi(t)) return null;
+      if (!passOn.includes(t)) passOn.push(t);
+    }
+  }
+  const gates = passOn.filter((t) => !isFilter(t));
+  return gates.length > 0 ? gates : null;
+}
+
+/**
  * Builds an item entry for a weapon entity and proposes handlers from related entities.
  *
  * Candidates come from, in order of confidence:
@@ -412,6 +431,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   // touch triggers that start the chain count as feeders (they are confirmed as activation triggers below)
   const touchFeeders = byOrder.filter((c) => HOOKABLE_TRIGGERS.has(c.entity.classname) && c.entity.connections.some((k) => /^on(start)?touch|^ontrigger/i.test(k.output)));
   for (const c of touchFeeders) included.add(c.entity.id);
+  const behindFilters: Candidate[] = [];
   for (const c of byOrder) {
     const x = c.entity;
     if (!isFilter(x) || !x.hammerId || included.has(x.id)) continue;
@@ -420,13 +440,28 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       continue;
     }
     if (c.tier === 1 || fedByIncluded(x)) {
+      // a filter that only checks the user and hands the use on to relays / counters is not the
+      // ability: the gates behind it are (GFL lists those, e.g. button → filter → relay)
+      const passOn = filterPassOn(graph, x);
+      if (passOn) {
+        skipped.push(`${label(x)} (filter only checks the user and hands the use on to ${passOn.map(label).join(', ')})`);
+        for (const t of passOn) {
+          consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: true });
+          const nc = byId.get(t.id);
+          if (nc) {
+            nc.fedVia = true;
+            if (!behindFilters.includes(nc)) behindFilters.push(nc);
+          }
+        }
+        continue;
+      }
       included.add(x.id);
       chosen.push({ c });
     } else skipped.push(`${label(x)} (filter, not fed by a button)`);
   }
   const isGateCandidate = (o: Candidate) => (isGate(o.entity) || isCounter(o.entity)) && !isGameUi(o.entity);
   const gateCount = candidates.filter(isGateCandidate).length;
-  const gateQueue = byOrder.filter(isGateCandidate);
+  const gateQueue = [...byOrder, ...behindFilters.filter((b) => !byOrder.includes(b))].filter(isGateCandidate);
   const decided = new Set<number>();
   while (gateQueue.length > 0) {
     const c = gateQueue.shift()!;

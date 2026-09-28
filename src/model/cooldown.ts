@@ -120,9 +120,10 @@ export function inferCooldown(graph: EntityGraph, e: MapEntity, depth = 0, seen 
       : null;
 
   const around: CooldownGuess[] = [];
-  // 3. use-entities that fire into this one (button -> filter/relay)
+  // 3. use-entities that fire into this one (button -> filter/relay), and the filter in front of a
+  //    relay handler (button -> filter -> relay, where the filter locks / unlocks the button)
   for (const { from } of graph.incomingConnections(e)) {
-    if (isUseEntity(from)) {
+    if (isUseEntity(from) || (isFilter(from) && !isFilter(e))) {
       const g = inferCooldown(graph, from, depth + 1, seen);
       if (g) around.push(g);
     }

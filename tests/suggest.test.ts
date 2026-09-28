@@ -30,24 +30,38 @@ describe('graph + suggestions on the demo map', () => {
     expect(names.has('fire_particle')).toBe(true);
   });
 
-  it('suggests a button + filter chain for the fire materia', () => {
+  it('suggests the button and the relay behind a pass-on filter for the fire materia', () => {
     const { item } = suggestItemForWeapon(fire, graph);
     expect(item.hammerid).toBe('1201');
     expect(item.name).toBe('Fire');
     expect(item.color).toBe('red');
     const byId = new Map(item.handlers.map((h) => [h.hammerid, h]));
     expect(byId.get('1202')?.type).toBe('button');
-    // plain +use hook because the filter handler carries the message
+    // plain +use hook because the relay handler carries the message
     expect(byId.get('1202')?.mode).toBe(1);
     expect(byId.get('1202')?.event).toBeUndefined();
     expect(byId.get('1202')?.message).toBe(false);
-    expect(byId.get('1203')?.type).toBe('other');
-    expect(byId.get('1203')?.event).toBe('OnPass');
-    // the relay behind the filter and the pickup relay are not ability handlers
-    expect(byId.has('1204')).toBe(false);
+    // the filter only checks the user and triggers the relay (its Lock / Unlock is housekeeping),
+    // so the relay is the ability, as in the GFL configs
+    expect(byId.has('1203')).toBe(false);
+    expect(byId.get('1204')?.type).toBe('other');
+    expect(byId.get('1204')?.event).toBe('OnTrigger');
+    // the pickup relay is not an ability handler
     expect(byId.has('1205')).toBe(false);
     // trigger_hurt is not hooked by CS2Fixes and the strip trigger does not fire the item
     expect(item.triggers).toEqual([]);
+  });
+
+  it('keeps a filter that has effects of its own as the handler', () => {
+    const m = buildDemoMap();
+    const f = m.entities.find((e) => e.targetname === 'fire_filter')!;
+    f.connections.push({ output: 'OnPass', target: 'fire_particle', targetType: 7, input: 'Start', param: '', delay: 0, timesToFire: -1 });
+    const g = new EntityGraph(m.entities);
+    const { item } = suggestItemForWeapon(m.entities.find((e) => e.targetname === 'fire_weapon')!, g);
+    const ids = item.handlers.map((h) => h.hammerid);
+    expect(ids).toContain('1203');
+    // the relay behind it only repeats the filter's event
+    expect(ids).not.toContain('1204');
   });
 
   it('suggests counter handlers for templated items without spelling out templated', () => {
@@ -97,11 +111,11 @@ describe('cooldown inference from Lock/Unlock wiring', () => {
   const graph = new EntityGraph(map.entities);
   const byName = (n: string) => map.entities.find((e) => e.targetname === n)!;
 
-  it('reads the delayed Unlock on the button behind a filter handler', () => {
+  it('reads the delayed Unlock the filter in front of the relay handler puts on the button', () => {
     const { item, notes } = suggestItemForWeapon(byName('fire_weapon'), graph);
-    const filter = item.handlers.find((h) => h.hammerid === '1203')!;
-    expect(filter.cooldown).toBe(45);
-    expect(filter.mode).toBe(2);
+    const relay = item.handlers.find((h) => h.hammerid === '1204')!;
+    expect(relay.cooldown).toBe(45);
+    expect(relay.mode).toBe(2);
     expect(notes.some((n) => n.includes('cooldown 45s') && n.includes('Unlock'))).toBe(true);
     // the plain +use button hook stays without cooldown
     expect(item.handlers.find((h) => h.hammerid === '1202')!.cooldown).toBe(0);

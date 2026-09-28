@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildDemoMap } from '../src/model/demo';
 import { EntityGraph } from '../src/model/graph';
 import { suggestItemForWeapon } from '../src/model/suggest';
-import { serializeEntWatchConfig } from '../src/model/entwatch';
+import { newHandler, serializeEntWatchConfig } from '../src/model/entwatch';
 import { hintsFromGraph, hintsFromJsonc, remapConfig, replaceHammerId } from '../src/model/remap';
 import type { ParsedMap } from '../src/model/entity';
 
@@ -77,7 +77,8 @@ describe('hammerid remapping across map versions', () => {
   it('lists candidates when nothing matches uniquely', () => {
     const g2 = new EntityGraph(bumpedMap(10).entities);
     const hints = new Map([['1203', { classname: 'logic_relay' }]]);
-    const r = remapConfig({ items: [{ ...items[0], hammerid: '9999', handlers: items[0].handlers.filter((h) => h.hammerid === '1203') }] }, g2, hints);
+    const handler = newHandler({ type: 'other', hammerid: '1203', event: 'OnPass' });
+    const r = remapConfig({ items: [{ ...items[0], hammerid: '9999', handlers: [handler] }] }, g2, hints);
     const u = r.unresolved.find((x) => x.hammerid === '1203');
     expect(u).toBeDefined();
     expect(u!.candidates.length).toBeGreaterThan(1);
