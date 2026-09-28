@@ -199,7 +199,10 @@ function isUseLike(e: MapEntity): boolean {
 export function isActivationTrigger(graph: EntityGraph, trig: MapEntity, chain: Set<number>): { ok: boolean; reason: string } {
   if (!HOOKABLE_TRIGGERS.has(trig.classname)) return { ok: false, reason: `${trig.classname} is not hooked by CS2Fixes (only trigger_teleport/multiple/once)` };
   const switchedOn = graph.incomingConnections(trig).some(({ from, connection }) => chain.has(from.id) && ENABLE_INPUTS.has(connection.input.toLowerCase()));
-  const feedsChain = graph.relationsOf(trig).some((r) => r.kind === 'output' && chain.has(r.other.id));
+  // firing into a handler counts; killing/stripping the weapon itself does not activate anything
+  const feedsChain = graph
+    .relationsOf(trig)
+    .some((r) => r.kind === 'output' && chain.has(r.other.id) && !r.other.classname.startsWith('weapon_') && !/^kill/i.test(r.connection?.input ?? ''));
   const cooldownChain = suggestEvents(graph, trig).some((g) => g.reason.includes('cooldown chain'));
   if (switchedOn && !feedsChain) return { ok: false, reason: 'effect zone switched on by the item; listing it would make ebanned players immune to it' };
   if (feedsChain) return { ok: true, reason: 'touching it fires the item handlers' };
@@ -312,6 +315,8 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
         if (rel.kind === 'output') consider(rel.other, `${label(c.entity)} ${rel.label}`, 3);
         if (rel.kind === 'child') consider(rel.other, `parented to ${label(c.entity)}`, 3);
       }
+    } else if (HOOKABLE_TRIGGERS.has(c.entity.classname)) {
+      for (const rel of graph.relationsOf(c.entity)) if (rel.kind === 'output') consider(rel.other, `${label(c.entity)} ${rel.label}`, 3);
     } else if (isFilter(c.entity)) {
       for (const rel of graph.relationsOf(c.entity)) if (rel.kind === 'output') consider(rel.other, `${label(c.entity)} ${rel.label}`, 3);
     }
