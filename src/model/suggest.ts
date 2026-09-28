@@ -113,7 +113,7 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
       s.event = top.event;
       s.eventReason = top.reason;
     }
-    const cd = inferCooldown(graph, e);
+    const cd = inferCooldown(graph, e, s.event);
     if (cd) {
       s.cooldown = cd.seconds;
       s.cooldownReason = cd.reason;

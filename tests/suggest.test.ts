@@ -130,11 +130,9 @@ describe('cooldown inference from Lock/Unlock wiring', () => {
     expect(inferCooldown(graph, byName('heal_ui'))?.seconds).toBe(60);
   });
 
-  it('falls back to the button wait key and leaves counters alone', () => {
-    const btn = byName('ice_button');
-    const guess = inferCooldown(graph, btn);
-    expect(guess?.seconds).toBe(2);
-    expect(guess?.reason).toContain('wait');
+  it('ignores a button wait below the default reset and leaves counters alone', () => {
+    // wait 2 only stops double presses (func_button resets after 3s by default): no cooldown
+    expect(inferCooldown(graph, byName('ice_button'))).toBeNull();
     const { item } = suggestItemForWeapon(byName('ice_weapon'), graph);
     expect(item.handlers.find((h) => h.hammerid === '1303')!.cooldown).toBe(0);
   });

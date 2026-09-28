@@ -56,7 +56,8 @@ describe('game_ui implemented as a logic_case script', () => {
     const { item, notes } = suggestItemForWeapon(byName('[PR#]ww_knife&0000'), graph);
     expect(item.handlers.map((h) => h.hammerid)).toEqual(['2511', '2512']);
     expect(item.handlers.map((h) => h.name)).toEqual(['Attack', 'Attack2']);
-    expect(item.handlers.map((h) => h.cooldown)).toEqual([2, 25]);
+    // the attack relay re-enables itself after 2s: a double-press guard, not a cooldown
+    expect(item.handlers.map((h) => h.cooldown)).toEqual([0, 25]);
     expect(item.handlers.every((h) => h.templated === undefined)).toBe(true);
     expect([...item.triggers].sort()).toEqual(['2502', '2515']);
     expect(notes.some((n) => n.includes('ww_tele') && n.includes('spawns'))).toBe(true);

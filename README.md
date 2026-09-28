@@ -101,9 +101,13 @@ English summary is at the bottom.
 最後に classname ごとの事前確率（filter → `OnPass`、button → `OnPressed`、relay → `OnTrigger` …）で順位付けします。
 自身を `Kill` / `Lock` するだけの出力は下位になります。ハンドラ編集欄の event 候補はこの順で並び、推定と違う値のときは根拠付きで提案が出ます。
 
-**クールダウン推定**: `Lock` → 遅延付き `Unlock`、`Disable` → 遅延付き `Enable`、ボタンの `wait`、
-logic_branch / logic_compare / math_counter の `SetValue 1` → 遅延付き `SetValue 0` から秒数を読みます。
-ハンドラ自身、その手前のボタン / physbox / game_ui、その先のフィルタ / リレー、親付けされた trigger を見ます。
+**クールダウン推定**: 使用そのものが起こす配線だけを見ます。押下（とハンドラの event）から出力を遅延を足し合わせながら追い、
+通り道のゲート（ボタン / フィルタ / relay / branch …）が `Lock` → `Unlock`、`Disable` → `Enable`、
+`SetValue 1` → `SetValue 0` で閉じてから再び開くまでの時間をクールダウンにします（ハンドラより手前のゲートを優先し、複数あれば最も遅いもの）。
+ゾンビの沈黙スキルが人間のアイテム relay を 8 秒止める、ボスの relay がアイテムの branch を戻す、といった他の配線からの再有効化は数えません。
+2 秒以下の遅延は連打防止として cooldown 0（GFL 設定もほぼ 0。CS2Fixes は 1 秒の猶予を持つのでゲーム内の差もありません）、
+ボタンの `wait` は既定値 3 秒を超えるときだけ数えます。counter の `OnHitMax` / `OnHitMin`（数回使った後のオーバーヒート）は毎回のクールダウンに含めません。
+使用がボタンを Lock したまま別の配線（ミニゲーム終了など）が Unlock するときは、その Unlock の遅延を使います。
 
 **game_ui（クラス系アイテムの左右クリック）**: `game_ui` 本体だけでなく、`vscripts=game_ui` を持ち `caseNN` に
 `PressedAttack` などのキー名を書いた `logic_case`（スクリプト実装。skyrim / minas tirith などの workshop マップで一般的）も
@@ -263,9 +267,13 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   adjust event / mode / cooldown → download the jsonc. Existing configs can be imported and edited.
 - Suggestions follow the conventions of the 211 GFL CS2 ZE configs (plain `button` hook + `OnPass`/`OnTrigger` handler,
   `type` omitted for event handlers, counters for `math_counter`); the event is the output whose chain reaches a delayed
-  `Unlock`/`Enable` (or a `SetValue 1` / delayed `SetValue 0` pair on a branch / compare / counter), the cooldown is that
-  delay. An I/O search tab (`in:unlock`, `out:onpressed`, `class:filter`, …) lists every connection in the map and can
-  add a handler from any row.
+  `Unlock`/`Enable` (or a `SetValue 1` / delayed `SetValue 0` pair on a branch / compare / counter). The cooldown is read
+  from what the use itself sets off: the chain is followed from the press with the delays added up, and the cooldown is
+  the time until the gates the use goes through (button, filter, relay, branch; those in front of the handler first) are
+  open again. Re-enables from other wiring (a zombie silence, a boss relay) do not count, delays of 2 s or less are
+  double-press guards (cooldown 0), a button `wait` counts only above the default 3 s, and a counter's `OnHitMax` /
+  `OnHitMin` (an overheat after several uses) is not the per-use cooldown. An I/O search tab (`in:unlock`,
+  `out:onpressed`, `class:filter`, …) lists every connection in the map and can add a handler from any row.
 - Class items: a `game_ui`, or its script stand-in (a `logic_case` with `vscripts=game_ui` and `caseNN = PressedAttack…`),
   is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers (named
   `Attack` / `Attack2` … when there are several keys). Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
