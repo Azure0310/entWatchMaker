@@ -4,6 +4,7 @@ import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entw
 import { newHandler, newItem } from './entwatch';
 import { hasSelfCooldown, inferCooldown } from './cooldown';
 import { suggestEvents } from './events';
+import { findSelectionTriggers, isKnife } from './triggers';
 
 /** Outputs entity classes are known to fire (used for the event picker). */
 export const KNOWN_OUTPUTS: Record<string, string[]> = {
@@ -405,6 +406,16 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     if (h.templated === false) notes.push(`templated=false: the weapon is spawned by a template but ${label(ent)} is a single map entity`);
     if (s.eventReason && s.event) notes.push(`event ${s.event}: ${s.eventReason}`);
     if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
+  }
+  // knife / class items: strip zone on the knife and teleports landing on it
+  if (isKnife(e)) {
+    const sel = findSelectionTriggers(graph, e);
+    if (sel.length === 0) notes.push('knife item: no strip zone or teleport landing near it was found (radius 256 / 384 units)');
+    for (const st of sel) {
+      if (!st.trigger.hammerId || triggers.includes(st.trigger.hammerId)) continue;
+      triggers.push(st.trigger.hammerId);
+      notes.push(`trigger ${label(st.trigger)}: ${st.reason}`);
+    }
   }
   for (const sk of skipped) notes.push(`skipped ${sk}`);
   item.triggers = triggers;
