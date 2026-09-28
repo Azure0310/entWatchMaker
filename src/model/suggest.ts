@@ -4,7 +4,7 @@ import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entw
 import { newHandler, newItem } from './entwatch';
 import { counterUse, hasSelfCooldown, inferCooldown } from './cooldown';
 import { suggestEvents } from './events';
-import { findSelectionTriggers, isKnife, stripsVia } from './triggers';
+import { abilityReach, findSelectionTriggers, isKnife, stripsVia, switchedOnBy } from './triggers';
 import { HOOKABLE_TRIGGERS, abilityOutputs, hasUseOutput, isArmInput, isCounter, isFilter, isGameUi, isGate, isHousekeepingInput, isUseEntity, isUseLike, keyLabel } from './roles';
 import { minDistance, origin } from './position';
 
@@ -687,17 +687,16 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   // knife / class items: triggers that spawn, strip or land on the knife (found by position, not by name)
   const selection = isKnife(e) ? findSelectionTriggers(graph, e) : [];
   const selectionIds = new Set(selection.map((s) => s.trigger.id));
+  // Triggers wired into the item itself (a zone the holder touches, a hurt zone parented to the
+  // weapon) are never listed: "triggers" keeps ebanned players from touching them, so they would
+  // become immune to its effect zones, and an ebanned player cannot hold the item anyway. The GFL
+  // configs list none of them (0 of 44 on the evaluated maps).
   for (const c of byOrder) {
     if (!c.entity.classname.startsWith('trigger_') || !c.entity.hammerId) continue;
     if (selectionIds.has(c.entity.id)) continue; // reported below
     const verdict = isActivationTrigger(graph, c.entity, chainIds);
-    if (verdict.ok) {
-      triggers.push(c.entity.hammerId);
-      notes.push(`trigger ${label(c.entity)}: ${c.why}; ${verdict.reason}`);
-    } else {
-      included.delete(c.entity.id);
-      skipped.push(`trigger ${label(c.entity)} (${verdict.reason})`);
-    }
+    if (!verdict.ok) included.delete(c.entity.id);
+    skipped.push(`trigger ${label(c.entity)} (${verdict.ok ? `${verdict.reason}; part of the item, not a trigger to keep ebanned players off` : verdict.reason})`);
   }
 
   for (const { c, extra } of chosen) {
@@ -726,8 +725,13 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   }
   if (isKnife(e)) {
     if (selection.length === 0) notes.push('knife item: no strip zone tied to it, teleport landing (within 64 units) or template spawner for it was found');
+    const ability = abilityReach(graph, chosen.map(({ c }) => c.entity));
     for (const st of selection) {
       if (!st.trigger.hammerId || triggers.includes(st.trigger.hammerId)) continue;
+      if (st.kind === 'landing' && switchedOnBy(graph, st.trigger, ability)) {
+        skipped.push(`trigger ${label(st.trigger)} (${st.reason}, but the item's own logic switches it on: the ability's teleport, not the way to get the item)`);
+        continue;
+      }
       triggers.push(st.trigger.hammerId);
       notes.push(`trigger ${label(st.trigger)}: ${st.reason}`);
     }

@@ -22,6 +22,8 @@ describe('hammerid remapping across map versions', () => {
   const v1 = buildDemoMap();
   const g1 = new EntityGraph(v1.entities);
   const items = v1.entities.filter((e) => e.classname.startsWith('weapon_')).map((w) => suggestItemForWeapon(w, g1).item);
+  // a trigger added by hand: remapping carries triggers over as well
+  items.find((i) => i.hammerid === '2200')!.triggers.push('2201');
   const config = { items };
 
   it('re-resolves every id using hints from the previous map', () => {

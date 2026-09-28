@@ -114,8 +114,56 @@ export function classifyTrigger(graph: EntityGraph, trig: MapEntity): TriggerInf
   return { trigger: trig, strips: strip ? { via: strip.via } : null, teleportsTo };
 }
 
+/**
+ * What the item's own handlers set off: 3 hops through anything but Kill, into the templates they
+ * spawn. A teleport switched on from there is the ability's portal or warp (a zombie that pulls
+ * humans in), not the way to get the item; listing it would make ebanned players immune to it.
+ */
+export function abilityReach(graph: EntityGraph, handlers: MapEntity[], depth = 3): Set<number> {
+  const seen = new Set(handlers.map((h) => h.id));
+  let frontier = [...handlers];
+  for (let d = 0; d < depth && frontier.length > 0; d++) {
+    const next: MapEntity[] = [];
+    for (const x of frontier) {
+      for (const rel of graph.relationsOf(x)) {
+        const follows =
+          (rel.kind === 'output' && !!rel.connection && !/^kill/i.test(rel.connection.input)) ||
+          rel.kind === 'template' ||
+          (rel.kind === 'keyref' && x.classname === 'env_entity_maker');
+        if (!follows || seen.has(rel.other.id)) continue;
+        seen.add(rel.other.id);
+        next.push(rel.other);
+      }
+    }
+    frontier = next;
+  }
+  return seen;
+}
+
+/** `trig` moves the stage on: opens / closes doors, switches teleports, removes walls, moves spawn points. */
+function movesStage(graph: EntityGraph, trig: MapEntity): boolean {
+  return trig.connections.some((c) => {
+    const input = c.input.toLowerCase();
+    if (input === 'setabsorigin' || input === 'startfire') return true;
+    return graph.connectionTargets(trig, c).some(
+      (t) =>
+        (/^(open|close|toggle)$/.test(input) && /door|movelinear|rotating/.test(t.classname)) ||
+        (/^(enable|disable)$/.test(input) && t.classname === 'trigger_teleport') ||
+        (input === 'kill' && /^func_(brush|wall|breakable|door|movelinear|tracktrain|physbox)/.test(t.classname)),
+    );
+  });
+}
+
+/** `trig` is part of what `reach` sets off, or is switched on / fired from it. */
+export function switchedOnBy(graph: EntityGraph, trig: MapEntity, reach: Set<number>): boolean {
+  if (reach.has(trig.id)) return true;
+  return graph.incomingConnections(trig).some(({ from, connection }) => reach.has(from.id) && /^(enable|toggle|fireuser\d)$/i.test(connection.input));
+}
+
 export interface SelectionTrigger {
   trigger: MapEntity;
+  /** spawns the item, strips the player on it, or teleports onto it */
+  kind: 'spawner' | 'strip' | 'landing';
   reason: string;
 }
 
@@ -137,18 +185,17 @@ export function tiedToWeapon(graph: EntityGraph, trig: MapEntity, weapon: MapEnt
 }
 
 /**
- * Triggers that hand out the item: ones that spawn its template, strip zones the map ties to the
- * item (see tiedToWeapon; a strip zone that is merely nearby belongs to a round start or to the
- * item next door), and teleports that land on it (or on that strip zone). A landing belongs to
+ * Triggers that hand out the item: ones that spawn its template (and no other item's), strip
+ * zones the map ties to the item (see tiedToWeapon; a strip zone that is merely nearby belongs to
+ * a round start or to the item next door), and teleports that land on it. A landing belongs to
  * the nearest weapon only, so the teleport of the item next door is not picked up. The GFL
  * configs list landings within a few dozen units of the knife and none further than 64.
  */
 export function findSelectionTriggers(
   graph: EntityGraph,
   weapon: MapEntity,
-  opts: { stripRadius?: number; teleportRadius?: number; onTopRadius?: number } = {},
+  opts: { teleportRadius?: number; onTopRadius?: number } = {},
 ): SelectionTrigger[] {
-  const stripRadius = opts.stripRadius ?? 256;
   const teleportRadius = opts.teleportRadius ?? 64;
   const onTopRadius = opts.onTopRadius ?? 32;
   const wpos = worldPositions(graph, weapon).map((p) => p.position);
@@ -163,9 +210,14 @@ export function findSelectionTriggers(
       return od !== null && od + 16 < d;
     });
 
+  // a trigger that spawns this item and no other hands it out; one that spawns several items, or
+  // also opens gates / switches teleports / moves spawn points, is a stage start, and listing it
+  // would keep ebanned players from starting the stage. GFL lists 17 of the first kind and none
+  // of the other.
   for (const trig of hookable) {
     const sp = spawnsEntity(graph, trig, weapon);
-    if (sp) out.push({ trigger: trig, reason: `spawns the item's template (${sp.via})` });
+    if (!sp || otherWeapons.some((o) => spawnsEntity(graph, trig, o)) || movesStage(graph, trig)) continue;
+    out.push({ trigger: trig, kind: 'spawner', reason: `spawns the item's template (${sp.via})` });
   }
 
   const infos = hookable.map((t) => classifyTrigger(graph, t));
@@ -175,7 +227,7 @@ export function findSelectionTriggers(
     const tie = tiedToWeapon(graph, info.trigger, weapon);
     if (!tie) continue;
     stripZones.push(info.trigger);
-    out.push({ trigger: info.trigger, reason: `strip zone ${tie} (${info.strips.via})` });
+    out.push({ trigger: info.trigger, kind: 'strip', reason: `strip zone ${tie} (${info.strips.via})` });
   }
   if (stripZones.length === 0) {
     // nothing tied: a strip zone sitting right on the knife, and nearer to it than to any other
@@ -191,7 +243,7 @@ export function findSelectionTriggers(
       });
       if (closerWeapon) continue;
       stripZones.push(info.trigger);
-      out.push({ trigger: info.trigger, reason: `strip zone ${Math.round(d)} units above the knife (${info.strips.via})` });
+      out.push({ trigger: info.trigger, kind: 'strip', reason: `strip zone ${Math.round(d)} units above the knife (${info.strips.via})` });
     }
   }
   for (const info of infos) {
@@ -208,15 +260,9 @@ export function findSelectionTriggers(
       if (!nearestIsUs(best.landing, best.d)) {
         continue; // lands closer to another weapon
       }
-      out.push({ trigger: info.trigger, reason: `teleports ${Math.round(best.d)} units from the knife (${info.teleportsTo.via})` });
-      continue;
+      out.push({ trigger: info.trigger, kind: 'landing', reason: `teleports ${Math.round(best.d)} units from the knife (${info.teleportsTo.via})` });
     }
-    const zoneDistances = stripZones
-      .map((z) => minDistanceTo(graph, z, info.teleportsTo!.positions))
-      .filter((d): d is number => d !== null);
-    if (zoneDistances.length > 0 && Math.min(...zoneDistances) <= stripRadius && nearestIsUs(best.landing, best.d)) {
-      out.push({ trigger: info.trigger, reason: `teleports onto the strip zone (${info.teleportsTo.via})` });
-    }
+    // a teleport landing further off, somewhere on the strip zone, is not listed (GFL: 0 of 8)
   }
   // dedupe, keep first reason
   const seen = new Set<number>();

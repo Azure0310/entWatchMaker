@@ -188,12 +188,15 @@ describe('activation triggers vs effect zones', () => {
   const graph = new EntityGraph(map.entities);
   const byName = (n: string) => map.entities.find((e) => e.targetname === n)!;
 
-  it('lists the trigger the holder touches to fire the item, not the zone it switches on', () => {
+  it('uses the trigger the holder touches to find the handler, but lists neither it nor the zone it switches on', () => {
     const { item, notes } = suggestItemForWeapon(byName('push_weapon'), graph);
-    expect(item.triggers).toEqual(['2201']);
+    // "triggers" keeps ebanned players off: the holder's own touch zone and its effect zone are
+    // part of the item (GFL lists no such trigger)
+    expect(item.triggers).toEqual([]);
     expect(item.handlers.map((h) => h.hammerid)).toEqual(['2202']);
     expect(item.handlers[0].event).toBe('OnTrigger');
     expect(item.handlers[0].cooldown).toBe(30);
+    expect(notes.some((n) => n.includes('push_trigger') && n.includes('part of the item'))).toBe(true);
     expect(notes.some((n) => n.includes('push_zone') && n.includes('effect zone'))).toBe(true);
   });
 

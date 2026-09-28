@@ -175,10 +175,11 @@ const shownCooldown = (h: HandlerConfig) => {
  *   - uses GFL announces / shows on the HUD are announced / shown
  *   - the cooldown within 1 s (CS2Fixes' own leeway for use messages) and the same max uses, as far
  *     as the mode uses them (a counter's uses come from its min / max)
- *   - the same triggers (ebanned players cannot touch them)
+ *   - the same triggers (ebanned players cannot touch them). CS2Fixes hooks every hammerid in any
+ *     item's "triggers", so a trigger listed under another item of the map is the same in game.
  * Returns "kind: hammerid" strings.
  */
-function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig): string[] {
+function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig, mapTriggers: { gfl: Set<string>; tool: Set<string> }): string[] {
   const problems: string[] = [];
   const get = (id: string) => graph.byHammerId.get(id)?.[0];
   /** Uses shown on the HUD: a counter's range, or maxuses in mode 3 / 4. */
@@ -240,9 +241,10 @@ function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig): 
     const tu = shownUses(carrier);
     if (gu !== tu) problems.push(`${gu === 0 ? 'max uses not in GFL' : tu === 0 ? 'max uses missing' : 'max uses differ'}: ${h.hammerid}`);
   }
-  const t = compareSets(cfg.triggers, tool.triggers);
-  if (t.missed.length > 0) problems.push(`trigger missed: ${t.missed.join(' ')}`);
-  if (t.extra.length > 0) problems.push(`extra trigger: ${t.extra.join(' ')}`);
+  const missed = cfg.triggers.filter((id) => !mapTriggers.tool.has(id));
+  const extra = tool.triggers.filter((id) => !mapTriggers.gfl.has(id));
+  if (missed.length > 0) problems.push(`trigger missed: ${missed.join(' ')}`);
+  if (extra.length > 0) problems.push(`extra trigger: ${extra.join(' ')}`);
   return problems;
 }
 interface MapResult {
@@ -262,14 +264,17 @@ const describe = (graph: EntityGraph, hid: string) => {
 };
 const showView = (v: HandlerView) => `${v.type}${v.event ? ' ' + v.event : ''} m${v.mode} cd${v.cooldown} max${v.maxuses}`;
 
-function evaluateItem(graph: EntityGraph, cfg: ItemConfig): ItemResult {
+const weaponOf = (graph: EntityGraph, cfg: ItemConfig): MapEntity | undefined => {
   const list = graph.byHammerId.get(cfg.hammerid) ?? [];
-  const weapon: MapEntity | undefined = list.find((e) => e.classname.startsWith('weapon_')) ?? list[0];
+  return list.find((e) => e.classname.startsWith('weapon_')) ?? list[0];
+};
+
+function evaluateItem(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig | null, mapTriggers: { gfl: Set<string>; tool: Set<string> }): ItemResult {
+  const weapon = weaponOf(graph, cfg);
   const empty = Object.fromEntries(FIELDS.map((f) => [f, { same: 0, total: 0 }])) as ItemResult['fieldChecks'];
-  if (!weapon) {
+  if (!weapon || !tool) {
     return { name: cfg.name, hammerid: cfg.hammerid, weapon: null, handlers: compareSets(cfg.handlers.map((h) => h.hammerid), []), triggers: compareSets(cfg.triggers, []), fieldDiffs: [], fieldChecks: empty, structural: false, exact: false, item: { name: false, color: false, transfer: false }, inGame: ['weapon not in the map'] };
   }
-  const tool = suggestItemForWeapon(weapon, graph).item;
   const handlers = compareSets(cfg.handlers.map((h) => h.hammerid), tool.handlers.map((h) => h.hammerid));
   const triggers = compareSets(cfg.triggers, tool.triggers);
   const fieldDiffs: ItemResult['fieldDiffs'] = [];
@@ -301,7 +306,7 @@ function evaluateItem(graph: EntityGraph, cfg: ItemConfig): ItemResult {
       // unset transfer means CS2Fixes' default: off for knives
       transfer: (cfg.transfer ?? !knife) === (tool.transfer ?? !knife),
     },
-    inGame: inGameProblems(graph, cfg, tool),
+    inGame: inGameProblems(graph, cfg, tool, mapTriggers),
   };
 }
 
@@ -340,7 +345,12 @@ function evaluateMap(folder: string, map: ParsedMap, loaderPick: string | undefi
     return;
   }
   const graph = new EntityGraph(map.entities);
-  const items = config.items.map((it) => evaluateItem(graph, it));
+  const tools = config.items.map((it) => {
+    const weapon = weaponOf(graph, it);
+    return weapon ? suggestItemForWeapon(weapon, graph).item : null;
+  });
+  const mapTriggers = { gfl: new Set(config.items.flatMap((it) => it.triggers)), tool: new Set(tools.flatMap((t) => t?.triggers ?? [])) };
+  const items = config.items.map((it, i) => evaluateItem(graph, it, tools[i], mapTriggers));
   const ids = config.items.flatMap((it) => [it.hammerid, ...it.handlers.map((h) => h.hammerid), ...it.triggers]);
   const foundRatio = ids.length ? ids.filter((id) => graph.byHammerId.has(id)).length / ids.length : 1;
   const covered = new Set(config.items.map((it) => it.hammerid));
