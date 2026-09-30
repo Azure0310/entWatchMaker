@@ -725,7 +725,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   }
   if (isKnife(e)) {
     if (selection.length === 0) notes.push('knife item: no strip zone tied to it, teleport landing (within 64 units) or template spawner for it was found');
-    const ability = abilityReach(graph, chosen.map(({ c }) => c.entity));
+    const ability = abilityReach(graph, chosen.map(({ c }) => c.entity), e);
     for (const st of selection) {
       if (!st.trigger.hammerId || triggers.includes(st.trigger.hammerId)) continue;
       if (st.kind === 'landing' && switchedOnBy(graph, st.trigger, ability)) {

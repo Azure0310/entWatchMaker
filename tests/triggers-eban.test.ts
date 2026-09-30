@@ -57,4 +57,27 @@ describe('eban triggers: what hands the item out, not the stage or the ability',
     expect(item.triggers).toEqual(['405']);
     expect(notes.some((n) => n.includes('z_portal') && n.includes("item's own logic switches it on"))).toBe(true);
   });
+
+  it('follows AddOutput to a portal the ability spawns, and the knife clean-up to a rescue teleport', () => {
+    const entities = [
+      mk('weapon_knife', 'd_knife', '500', { origin: '0 0 0' }, [c('OnPlayerPickup', 'd_ui', 'Activate'), c('OnUser2', 'd_cleanup', 'Trigger')]),
+      mk('logic_case', 'd_ui', '501', { vscripts: 'game_ui', case01: 'PressedAttack', origin: '0 0 16' }, [c('OnCase01', 'd_relay', 'Trigger')]),
+      // the ability arms the portal maker at run time: nothing in the map wires it statically
+      mk('logic_relay', 'd_relay', '502', { origin: '0 0 24' }, [c('OnTrigger', 'd_detect', 'AddOutput', 'OnCase03>d_goto_maker>ForceSpawnAtEntityOrigin>!activator>0>1'), c('OnTrigger', '!self', 'Disable'), c('OnTrigger', '!self', 'Enable', '', 90)]),
+      mk('logic_case', 'd_detect', '503'),
+      mk('env_entity_maker', 'd_goto_maker', '504', { entitytemplate: 'd_goto_tpl', origin: '800 0 0' }),
+      mk('point_template', 'd_goto_tpl', '505', { template01: 'd_goto' }, [c('OnEntitySpawned', 'd_goto', 'Enable', '', 4.5)]),
+      mk('trigger_multiple', 'd_goto', '506', { origin: '900 0 0', startdisabled: '1' }, [c('OnStartTouch', 'd_back', 'TeleportToCurrentPos')]),
+      mk('point_teleport', 'd_back', '507', { origin: '0 20 0' }),
+      // when the holder leaves, the clean-up switches on a teleport that frees the grabbed humans
+      mk('logic_relay', 'd_cleanup', '508', {}, [c('OnTrigger', 'd_rescue', 'Enable', '', 0.1)]),
+      mk('trigger_multiple', 'd_rescue', '509', { origin: '700 0 0', startdisabled: '1' }, [c('OnStartTouch', 'd_grab_tp', 'TeleportToCurrentPos')]),
+      mk('point_teleport', 'd_grab_tp', '510', { origin: '0 -30 0' }),
+      mk('trigger_teleport', 'd_room_tp', '511', { origin: '2000 0 0', target: 'd_in' }),
+      mk('info_teleport_destination', 'd_in', '512', { origin: '0 10 0' }),
+    ];
+    const g = new EntityGraph(entities);
+    const { item } = suggestItemForWeapon(entities[0], g);
+    expect(item.triggers).toEqual(['511']);
+  });
 });

@@ -161,6 +161,8 @@ strip を撃つ relay、ボタンから撃たれていない logic_timer は候�
 - 着地点（`trigger_teleport` の `target`、または `point_teleport`）が武器から 64 ユニット以内にあるテレポート。
   着地点は **最も近い武器にだけ** 割り当てるので、隣のアイテムのテレポートは付きません（GFL 設定の着地点はどれも数十ユニット以内です）。
   アイテム自身のロジックが有効にするテレポート（ゾンビが人間を引き寄せるポータルなど）は能力の一部なので付けません。
+  ハンドラから先の配線に加えて、`AddOutput` で実行時に結ばれる先（能力がポータルの maker を後から繋ぐもの）と、
+  武器自身の `OnPlayerPickup` 以外の出力（持ち主が抜けたときに、捕まえた人間を戻す救出テレポートを有効にする後始末）もたどります。
 
 アイテムに組み込まれた trigger（ホルダーが触れて発動するゾーン、武器に親付けされたダメージ / 重力ゾーン、拾えるようにする
 `ToggleCanBePickedUp` の trigger）はハンドラ探しには使いますが `triggers` には載せません。GFL 設定もこの種類は 1 つも載せていません（評価したマップで 0 / 44）。
@@ -308,7 +310,9 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   removes walls — a stage start), strip zones (`player_weaponstrip`, `point_script RunScriptInput "*Strip*"`,
   `point_entity_finder` → Kill) the map ties to the knife (same template lump, parented to it, or fired at by its
   `OnPlayerPickup`; failing that, a zone within 32 units on top of it) and teleports landing within 64 units, each
-  landing assigned to the nearest weapon only (a teleport the item's own logic switches on is its ability, not listed).
+  landing assigned to the nearest weapon only (a teleport the item's own logic switches on is its ability, not listed;
+  that logic includes what an `AddOutput` wires up at run time and the weapon's own outputs other than
+  `OnPlayerPickup`, such as the clean-up that frees grabbed players when the holder leaves).
 - `triggers` are the ones ebanned players must not touch; CS2Fixes hooks every hammerid listed under any item. Triggers
   built into the item (the zone the holder touches, hurt / gravity zones parented to the weapon, `ToggleCanBePickedUp`
   pickups) help find the handlers but are never listed: ebanned players would become immune to them, and GFL lists

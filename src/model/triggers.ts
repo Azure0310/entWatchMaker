@@ -115,24 +115,38 @@ export function classifyTrigger(graph: EntityGraph, trig: MapEntity): TriggerInf
 }
 
 /**
- * What the item's own handlers set off: 3 hops through anything but Kill, into the templates they
- * spawn. A teleport switched on from there is the ability's portal or warp (a zombie that pulls
- * humans in), not the way to get the item; listing it would make ebanned players immune to it.
+ * What the item's own logic sets off: its handlers, and the weapon's outputs other than
+ * OnPlayerPickup (a clean-up loop that runs while it is held, not the pickup, which also arms
+ * stage logic), 3 hops through anything but Kill, into the templates they spawn and to what an
+ * AddOutput wires up at run time. A teleport switched on from there is the ability's portal or
+ * warp (a zombie that pulls humans in, the rescue teleport when its holder leaves), not the way to
+ * get the item; listing it would make ebanned players immune to it.
  */
-export function abilityReach(graph: EntityGraph, handlers: MapEntity[], depth = 3): Set<number> {
-  const seen = new Set(handlers.map((h) => h.id));
-  let frontier = [...handlers];
+export function abilityReach(graph: EntityGraph, handlers: MapEntity[], weapon?: MapEntity, depth = 3): Set<number> {
+  const starts = weapon ? [...handlers, weapon] : [...handlers];
+  const seen = new Set(starts.map((h) => h.id));
+  let frontier = starts;
   for (let d = 0; d < depth && frontier.length > 0; d++) {
     const next: MapEntity[] = [];
+    const reached = (o: MapEntity) => {
+      if (seen.has(o.id)) return;
+      seen.add(o.id);
+      next.push(o);
+    };
     for (const x of frontier) {
       for (const rel of graph.relationsOf(x)) {
+        const pickup = x === weapon && /^onplayerpickup$/i.test(rel.connection?.output ?? '');
         const follows =
-          (rel.kind === 'output' && !!rel.connection && !/^kill/i.test(rel.connection.input)) ||
+          (rel.kind === 'output' && !!rel.connection && !/^kill/i.test(rel.connection.input) && !pickup) ||
           rel.kind === 'template' ||
           (rel.kind === 'keyref' && x.classname === 'env_entity_maker');
-        if (!follows || seen.has(rel.other.id)) continue;
-        seen.add(rel.other.id);
-        next.push(rel.other);
+        if (follows) reached(rel.other);
+      }
+      // AddOutput "OnCase03>item_goto_maker>ForceSpawnAtEntityOrigin>…" wires the named entity in
+      for (const c of x.connections) {
+        if (c.input.toLowerCase() !== 'addoutput' || (x === weapon && /^onplayerpickup$/i.test(c.output))) continue;
+        const parts = c.param.includes('>') ? c.param.split('>') : c.param.split(':');
+        if (parts.length >= 3) for (const o of graph.resolveName(parts[1].trim(), x.source.scope, x.source.container)) reached(o);
       }
     }
     frontier = next;
