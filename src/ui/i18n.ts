@@ -1,3 +1,5 @@
+import { stripperStrings } from './i18nStripper';
+
 export type Lang = 'ja' | 'en';
 
 const strings = {
@@ -154,6 +156,7 @@ const strings = {
     'v.eventUnknown': 'この出力名はエンティティの既知の出力にありません',
     'v.buttonTypeOnNonButton': 'type button は +use をフックします。ボタン以外なら type を other/counter にしてください',
     'sugg.notes': '自動追加の根拠',
+    ...stripperStrings.ja,
   },
   en: {
     'app.title': 'entWatch Maker',
@@ -308,6 +311,7 @@ const strings = {
     'v.eventUnknown': 'this output is not among the entity\'s known outputs',
     'v.buttonTypeOnNonButton': 'type button hooks +use; use other/counter for non-button entities',
     'sugg.notes': 'Why these were added',
+    ...stripperStrings.en,
   },
 } as const;
 

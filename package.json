@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Browser tool that reads CS2 .vmap / workshop .vpk files, lists weapon_ item entities with their related entities and I/O, and generates EntWatch <map>.jsonc configs for CS2Fixes.",
+  "description": "Browser tool that reads CS2 .vmap / workshop .vpk files, lists weapon_ item entities with their related entities and I/O, and generates EntWatch <map>.jsonc configs for CS2Fixes and StripperCS2 configs (filter / add / modify).",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",

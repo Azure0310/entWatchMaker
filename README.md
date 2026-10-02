@@ -5,6 +5,10 @@ Zombie Escape のアイテム（`weapon_*` エンティティ）と、それに�
 トリガーをツリー表示・Input/Output 確認しながら、[CS2Fixes](https://github.com/Source2ZE/CS2Fixes) 内蔵
 EntWatch 用の `<マップ名>.jsonc` を作るツールです。
 
+同じ読み込み・ツリー・Input/Output 画面を使って、[StripperCS2](https://github.com/Source2ZE/StripperCS2)
+（マップのエンティティを削除・追加・変更する Metamod プラグイン）の設定を作る **Stripper モード**もあります
+（画面上部の「EntWatch / Stripper」スイッチで切り替え → [Stripper モード](#stripper-モードstrippercs2-の設定を作る)）。
+
 すべての処理はブラウザ内 (Web Worker) で完結し、ファイルはどこにもアップロードされません。
 
 English summary is at the bottom.
@@ -149,6 +153,50 @@ hammerid は同じ vmap を再コンパイルする限り変わりませんが�
 （`"hammerid": "1202", // func_button fire_button`）の 2 つから集めます。コメントを消さずに保存しておくと、
 ツールだけで旧設定を新マップへ移行できます。
 
+## Stripper モード（StripperCS2 の設定を作る）
+
+画面上部のスイッチを **Stripper** にすると、右側が StripperCS2 の設定（`filter` / `add` / `modify`）の編集になります。
+マップの読み込み、エンティティ一覧、関連ツリー、プロパティ / Output / Input の表示、I/O 検索はそのまま使えます。
+手で jsonc を書く代わりに、見ているエンティティからアクションを作ります。
+
+| やりたいこと | 操作 | 出力される内容 |
+| --- | --- | --- |
+| エンティティを消す | 詳細パネルの「このエンティティを削除」（ツリー行の ✂ でも可） | `filter`（`classname` + `hammeruniqueid`） |
+| 同じ classname をすべて消す | 「同じ classname をすべて削除」 | `filter`（`classname` のみ） |
+| プロパティを書き換える / 足す / 消す | プロパティ表の ✎ / 🗑、下の「＋ キーを追加」 | `modify` の `replace` / `insert` / `delete`（同じエンティティの編集は 1 つの `modify` にまとまる） |
+| Output を消す | Output 表の 🗑（Input 表・I/O 検索の 🗑 なら送信元の Output を消す） | `modify` の `delete.io` |
+| Output を書き換える | Output 表の ✎ → 右のエディタで変えたい欄だけ入力 | `match.io` + `replace.io` |
+| Output を足す | Output 表下の「＋ 出力を追加」 | `modify` の `insert.io` |
+| エンティティを複製する | 「複製して追加」 | `add`（`hammeruniqueid` を除いた全キー値と全 Output） |
+| 自由に書く | 右上の「＋ 削除 / 変更 / 追加」 | 空のアクション。照合は「選択中のエンティティから作る」で ID / 名前 / 位置 / クラスから自動入力 |
+
+- **一致件数がその場で出ます。** 各アクションに「1 件に一致」「一致なし」が付き、一致したエンティティをクリックして確認できます。
+  左の一覧とツリーには、削除される ✂ / 変更される ✎ のバッジが付き、詳細パネルの「適用後」タブで書き換え後のプロパティと Output の差分を見られます。
+- **照合の既定は `classname` + `hammeruniqueid`** です。マップ更新で ID が振り直されても誤爆しないよう `classname` を併記し、一致しなければ何も起きません
+  （名前で照合に切り替えるボタンもあります）。値を `/…/` で囲むと正規表現です。
+- **出力先は lump ごとのファイル**です。メインは `addons/StripperCS2/maps/<マップ>/default_ents.jsonc`、`point_template` の子 lump は
+  `maps/<マップ>/9#entitylumpname.jsonc` のように lump 名のファイルになります。エンティティの lump から自動で振り分け、複数ファイルのときは
+  「すべて zip で保存」で `addons/StripperCS2/…` 付きの zip にまとめます（`csgo` フォルダに展開）。`global_map.jsonc`（メイン lump だけ）/
+  `global_lump.jsonc`（全 lump）も出力先に選べます。
+- **既存の StripperCS2 の jsonc も読み込めます**（同じキーを繰り返した `"add"` や単一オブジェクト形式も可）。末尾カンマなど、プラグインが読めない書き方には警告が出ます。
+- 編集内容はマップ名ごとにブラウザへ保存されます（EntWatch の設定とは別）。
+
+プラグインの実装（`src/actions/actions.cpp` / `json_actions.cpp`）に合わせた挙動で、ツールはこれを再現して件数を出しています。
+
+- 実行順は lump ごとに **filter → add → modify**（ファイル内の並びは無関係）。そのため `filter` は同じファイルの `add` で作ったエンティティを消せず、`modify` は `add` したエンティティにも一致します。
+  lump のファイル → `global_map` → `global_lump` の順に適用されます。
+- キー値はすべて **文字列**です（数値で書くとプラグインが読み込みに失敗します）。正規表現は PCRE2 で、**大文字小文字を区別せず部分一致**です（完全一致は `/^…$/`）。
+- `match` が空の `filter` は lump の全エンティティを消します。`delete` のキーは値が一致したときだけ消えるので、値を問わず消すなら `/.*/` です（ツールはエンティティの現在値を書きます）。
+- `replace.io` は `match.io` で選んだ Output すべてに適用され、`match.io` が空だと何も起きません。
+
+注意点:
+
+- 正規表現の一致件数は JavaScript の正規表現で数えています。PCRE2 固有の構文（`(?i)` など）は件数を出せず、エラー扱いになることがあります。
+- `origin` / `angles` はゲーム内部の文字列表現がこのツールの表示と違う可能性があるため、一致しないことがあります（警告が出ます）。ID か名前での照合が確実です。
+- lump 名は vpk 内のパス（`maps/<マップ>/entities/<lump>.vents_c`）から決めています。`.vmap` を読み込んだ場合は lump 構成が分からないため、すべて `default_ents` として扱います。
+  サーバーで `entity_lump_list` を実行して、実際の lump 名と合っているか確認してください。
+- プラグインの動作確認（実機でのマップロード）まではしていません。出力はプラグインのソースとスキーマ（`schema.json`）に合わせています。
+
 ## 開発
 
 ```bash
@@ -189,6 +237,11 @@ npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] 
 | `src/model/suggest.ts` | ハンドラ / 色 / 名前の推定ヒューリスティクス |
 | `src/model/entwatch.ts` | jsonc のシリアライズ / パース |
 | `src/model/validate.ts` | 設定の検証 |
+| `src/model/stripper.ts` | StripperCS2 設定のモデル、jsonc の書き出し / 読み込み（重複キー対応）、lump → ファイルの対応 |
+| `src/model/stripperMatch.ts` | プラグインの照合と filter → add → modify の再現（一致件数・適用後の状態） |
+| `src/model/stripperBuild.ts` | エンティティからの照合 / 削除 / 複製 / キー値・Output 編集の生成 |
+| `src/model/stripperValidate.ts` | Stripper 設定の検証 |
+| `src/model/zip.ts` | 複数ファイルをまとめる zip 書き出し |
 | `src/ui/` | React UI（日本語 / English） |
 | `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート） |
 
@@ -248,5 +301,16 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.
+- **Stripper mode** (switch at the top): the same loader, relation tree and Inputs/Outputs views build
+  [StripperCS2](https://github.com/Source2ZE/StripperCS2) configs (`filter` / `add` / `modify`). Remove or copy the selected entity,
+  edit its key values and outputs in place, or start from a blank action whose match is filled from the selected entity (by
+  `classname` + `hammeruniqueid` by default, or name / origin / class). Every action shows how many entities it matches in the
+  loaded map, the entity list and tree badge removed / changed entities, and the "After" tab diffs the entity. Output is one
+  jsonc per lump (`maps/<map>/default_ents.jsonc`, template lumps as `maps/<map>/9#entitylumpname.jsonc`, plus `global_map` /
+  `global_lump`), saved individually or as one zip rooted at `addons/StripperCS2/`. Existing StripperCS2 files can be imported
+  (repeated `"add"` keys included). The tool mirrors the plugin's semantics: filter → add → modify per lump, string values only,
+  `/regex/` values are case-insensitive and unanchored, `replace.io` only touches outputs selected by `match.io`. Caveats: counts
+  use JavaScript regexes (PCRE2-only syntax can't be counted), coordinates may be written differently by the game, lump names
+  come from the vpk paths (check with `entity_lump_list` on the server), and the output has not been loaded on a live server.
 - Dev: `npm install --legacy-peer-deps`, `npm run dev`, `npm test`, `npm run build`, `npm run build:single`. Deploy with the included
   GitHub Pages workflow (Settings → Pages → Source: GitHub Actions).
