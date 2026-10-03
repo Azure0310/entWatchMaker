@@ -2,12 +2,14 @@
  * Runs the tool's suggestion for the weapons of every map it can load and compares the result
  * with the GFL EntWatch configs field by field.
  *
- *   npx tsx scripts/evaluate.ts <configs/entwatch dir> <map folder | workshop dir>... [--out dir]
+ *   npx tsx scripts/evaluate.ts <configs/entwatch dir> <map folder | workshop dir | dump>... [--out dir]
  *
  * A folder without .vpk / .vmap files (e.g. steamapps/workshop/content/730) is expanded to its
  * sub folders. When a workshop package holds several maps, every map that has a config is
- * evaluated (the loader alone would only read the biggest one). Writes report.md, details.md and
- * results.json into --out (default: eval).
+ * evaluated (the loader alone would only read the biggest one). Entity dumps written by
+ * `npm run dump:entities` (*.entities.json, or a folder of them) are read as maps too, so the
+ * evaluation runs without the map files. Writes report.md, details.md and results.json into --out
+ * (default: eval).
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -16,8 +18,9 @@ import { fileByteSource } from './nodeByteSource';
 import { classifyVpkFileName, VpkArchive } from '../src/formats/vpk';
 import { loadMapFromVpk } from '../src/model/loadMap';
 import { EntityGraph } from '../src/model/graph';
-import { friendlyName, type MapEntity, type ParsedMap } from '../src/model/entity';
-import { parseEntWatchConfig, type HandlerConfig, type ItemConfig } from '../src/model/entwatch';
+import { friendlyName, isWeaponEntity, type MapEntity, type ParsedMap } from '../src/model/entity';
+import { entitiesFromDump, type EntityDump } from '../src/model/dump';
+import { effectiveHandler, parseEntWatchConfig, serializeEntWatchConfig, type HandlerConfig, type ItemConfig } from '../src/model/entwatch';
 import { suggestItemForWeapon } from '../src/model/suggest';
 import { isKnife } from '../src/model/triggers';
 import { isHousekeepingInput } from '../src/model/roles';
@@ -28,7 +31,7 @@ const outDir = outIndex >= 0 ? args[outIndex + 1] : 'eval';
 const positional = args.filter((a, i) => !a.startsWith('--') && (outIndex < 0 || i !== outIndex + 1));
 const [configDir, ...targets] = positional;
 if (!configDir || targets.length === 0) {
-  console.error('usage: npx tsx scripts/evaluate.ts <configs/entwatch dir> <map folder | workshop dir>... [--out dir]');
+  console.error('usage: npx tsx scripts/evaluate.ts <configs/entwatch dir> <map folder | workshop dir | dump>... [--out dir]');
   process.exit(2);
 }
 
@@ -36,10 +39,28 @@ const configs = new Map<string, string>();
 for (const f of readdirSync(configDir)) if (f.toLowerCase().endsWith('.jsonc')) configs.set(f.slice(0, -6).toLowerCase(), path.join(configDir, f));
 
 const isMapFile = (f: string) => /\.(vpk|vmap)$/i.test(f);
+const isDump = (f: string) => /\.entities\.json$/i.test(f);
 const folders: string[] = [];
+const dumps: string[] = [];
 for (const t of targets) {
-  if (!statSync(t).isDirectory() || readdirSync(t).some(isMapFile)) folders.push(t);
+  if (isDump(t)) dumps.push(t);
+  else if (statSync(t).isDirectory() && readdirSync(t).some(isDump)) for (const f of readdirSync(t).filter(isDump)) dumps.push(path.join(t, f));
+  else if (!statSync(t).isDirectory() || readdirSync(t).some(isMapFile)) folders.push(t);
   else for (const d of readdirSync(t)) if (statSync(path.join(t, d)).isDirectory()) folders.push(path.join(t, d));
+}
+
+/** A map read back from the JSON `npm run dump:entities` writes. */
+function loadDump(file: string): ParsedMap {
+  const dump = JSON.parse(readFileSync(file, 'utf8')) as EntityDump;
+  const entities = entitiesFromDump(dump);
+  return {
+    mapName: dump.mapName ?? path.basename(file).replace(/\.entities\.json$/i, ''),
+    sourceKind: 'vpk',
+    sourceFiles: [file],
+    entities,
+    warnings: [],
+    stats: { lumps: 0, entities: entities.length, connections: entities.reduce((n, e) => n + e.connections.length, 0), weapons: entities.filter(isWeaponEntity).length },
+  };
 }
 
 /**
@@ -86,18 +107,25 @@ type Field = (typeof FIELDS)[number];
 /** Fields that decide whether the item behaves the same; message/ui are display choices. */
 const CORE: Field[] = ['type', 'event', 'mode', 'cooldown', 'maxuses'];
 
+/** The handler as CS2Fixes reads it: what the mode ignores (a cooldown in mode 1, maxuses on a counter, ...) is 0. */
 function view(h: HandlerConfig): HandlerView {
-  const counter = h.type === 'counterup' || h.type === 'counterdown';
+  const x = effectiveHandler(h);
   return {
     type: h.type,
     // CS2Fixes forces OutValue for counters, so their event does not matter
-    event: counter ? '' : (h.event ?? '').toLowerCase(),
-    mode: h.mode,
-    cooldown: h.cooldown ?? 0,
-    maxuses: h.maxuses ?? 0,
-    message: h.message,
+    event: (x.event ?? '').toLowerCase(),
+    mode: h.mode <= 1 ? 1 : h.mode,
+    cooldown: x.cooldown ?? 0,
+    maxuses: x.maxuses ?? 0,
+    message: x.message,
     ui: h.ui,
   };
+}
+
+/** The handler entries as the writer puts them in the jsonc (no comments): what GFL would see. */
+function writtenHandlers(item: ItemConfig): string[] {
+  const parsed = JSON.parse(serializeEntWatchConfig({ items: [{ ...item, handlers: item.handlers }] }, { comments: false }))[0];
+  return (parsed.handlers ?? []).map((h: unknown) => JSON.stringify(h));
 }
 const same = (f: Field, a: HandlerView, b: HandlerView) => (f === 'cooldown' ? Math.abs(a.cooldown - b.cooldown) < 0.01 : a[f] === b[f]);
 
@@ -127,6 +155,12 @@ interface ItemResult {
   item: { name: boolean; color: boolean; transfer: boolean };
   /** What would differ in game (CS2Fixes) from the GFL config; empty = usable as is. */
   inGame: string[];
+  /** The handler entries are written exactly as in the GFL config (same order, keys and values). */
+  written: boolean;
+  /** GFL handler entries the tool writes exactly (same keys and values). */
+  writtenHandlers: { gfl: number; same: number };
+  /** The written entries when they differ: GFL's and the tool's. */
+  writtenDiff?: { gfl: string[]; tool: string[] };
 }
 
 // ---- in-game equivalence --------------------------------------------------------------------------
@@ -273,7 +307,7 @@ function evaluateItem(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig | nu
   const weapon = weaponOf(graph, cfg);
   const empty = Object.fromEntries(FIELDS.map((f) => [f, { same: 0, total: 0 }])) as ItemResult['fieldChecks'];
   if (!weapon || !tool) {
-    return { name: cfg.name, hammerid: cfg.hammerid, weapon: null, handlers: compareSets(cfg.handlers.map((h) => h.hammerid), []), triggers: compareSets(cfg.triggers, []), fieldDiffs: [], fieldChecks: empty, structural: false, exact: false, item: { name: false, color: false, transfer: false }, inGame: ['weapon not in the map'] };
+    return { name: cfg.name, hammerid: cfg.hammerid, weapon: null, handlers: compareSets(cfg.handlers.map((h) => h.hammerid), []), triggers: compareSets(cfg.triggers, []), fieldDiffs: [], fieldChecks: empty, structural: false, exact: false, item: { name: false, color: false, transfer: false }, inGame: ['weapon not in the map'], written: false, writtenHandlers: { gfl: cfg.handlers.length, same: 0 } };
   }
   const handlers = compareSets(cfg.handlers.map((h) => h.hammerid), tool.handlers.map((h) => h.hammerid));
   const triggers = compareSets(cfg.triggers, tool.triggers);
@@ -290,6 +324,8 @@ function evaluateItem(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig | nu
   const structural = handlers.missed.length === 0 && handlers.extra.length === 0 && triggers.missed.length === 0 && triggers.extra.length === 0;
   const exact = structural && !fieldDiffs.some((d) => CORE.includes(d.field));
   const knife = isKnife(weapon);
+  const writtenG = writtenHandlers(cfg);
+  const writtenT = writtenHandlers(tool);
   return {
     name: cfg.name,
     hammerid: cfg.hammerid,
@@ -307,6 +343,9 @@ function evaluateItem(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig | nu
       transfer: (cfg.transfer ?? !knife) === (tool.transfer ?? !knife),
     },
     inGame: inGameProblems(graph, cfg, tool, mapTriggers),
+    written: writtenG.join('\n') === writtenT.join('\n'),
+    writtenHandlers: { gfl: writtenG.length, same: writtenG.filter((w) => writtenT.includes(w)).length },
+    writtenDiff: writtenG.join('\n') === writtenT.join('\n') ? undefined : { gfl: writtenG, tool: writtenT },
   };
 }
 
@@ -314,6 +353,13 @@ function evaluateItem(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig | nu
 const results: MapResult[] = [];
 const skipped: { folder: string; reason: string }[] = [];
 const details: string[] = [];
+for (const file of dumps) {
+  try {
+    evaluateMap(file, loadDump(file), undefined);
+  } catch (err) {
+    skipped.push({ folder: file, reason: `dump read failed: ${(err as Error).message.split('\n')[0]}` });
+  }
+}
 for (const folder of folders) {
   for (const candidate of await candidateMaps(folder)) {
     let map: ParsedMap;
@@ -361,7 +407,7 @@ function evaluateMap(folder: string, map: ParsedMap, loaderPick: string | undefi
 
   details.push(`## ${map.mapName} (${path.basename(folder)})`);
   for (const it of items) {
-    if (it.exact && it.inGame.length === 0) continue;
+    if (it.exact && it.inGame.length === 0 && it.written) continue;
     details.push(`- **${it.name}** #${it.hammerid} ${it.weapon ?? '(weapon NOT FOUND)'}${it.inGame.length === 0 ? ' — behaves the same in game' : ''}`);
     if (!it.weapon) continue;
     if (it.inGame.length > 0) details.push(`  - in game: ${it.inGame.join('; ')}`);
@@ -373,6 +419,10 @@ function evaluateMap(folder: string, map: ParsedMap, loaderPick: string | undefi
     for (const hid of [...new Set(diffs.map((d) => d.hammerid))]) {
       const g = config.items.find((c) => c.hammerid === it.hammerid)!.handlers.find((h) => h.hammerid === hid)!;
       details.push(`  - handler ${hid} fields: GFL \`${showView(view(g))}\` / tool: ${diffs.filter((d) => d.hammerid === hid).map((d) => `${d.field}=${d.tool}`).join(', ')}`);
+    }
+    if (it.writtenDiff) {
+      details.push(`  - written by GFL: ${it.writtenDiff.gfl.map((w) => `\`${w}\``).join(' ') || '(no handlers)'}`);
+      details.push(`  - written by the tool: ${it.writtenDiff.tool.map((w) => `\`${w}\``).join(' ') || '(no handlers)'}`);
     }
   }
   details.push('');
@@ -397,12 +447,16 @@ interface Totals {
   transfer: number;
   extraWeapons: number;
   inGame: number;
+  /** Items whose handler entries are written exactly like GFL. */
+  written: number;
+  wG: number;
+  wSame: number;
   /** Items per kind of in-game difference ("cooldown missing: 123" -> "cooldown missing"). */
   problems: Map<string, number>;
 }
 const problemKind = (p: string) => p.split(':')[0].trim();
 function totals(rs: MapResult[]): Totals {
-  const t: Totals = { maps: rs.length, items: 0, found: 0, exact: 0, structural: 0, hG: 0, hT: 0, hM: 0, tG: 0, tT: 0, tM: 0, fields: Object.fromEntries(FIELDS.map((f) => [f, { same: 0, total: 0 }])) as Totals['fields'], name: 0, color: 0, transfer: 0, extraWeapons: 0, inGame: 0, problems: new Map() };
+  const t: Totals = { maps: rs.length, items: 0, found: 0, exact: 0, structural: 0, hG: 0, hT: 0, hM: 0, tG: 0, tT: 0, tM: 0, fields: Object.fromEntries(FIELDS.map((f) => [f, { same: 0, total: 0 }])) as Totals['fields'], name: 0, color: 0, transfer: 0, extraWeapons: 0, inGame: 0, written: 0, wG: 0, wSame: 0, problems: new Map() };
   for (const r of rs) {
     t.extraWeapons += r.extraWeapons;
     for (const it of r.items) {
@@ -412,6 +466,9 @@ function totals(rs: MapResult[]): Totals {
       if (it.exact) t.exact++;
       if (it.structural) t.structural++;
       if (it.inGame.length === 0) t.inGame++;
+      if (it.written) t.written++;
+      t.wG += it.writtenHandlers.gfl;
+      t.wSame += it.writtenHandlers.same;
       for (const k of new Set(it.inGame.map(problemKind))) t.problems.set(k, (t.problems.get(k) ?? 0) + 1);
       t.hG += it.handlers.gfl.length;
       t.hT += it.handlers.tool.length;
@@ -446,6 +503,8 @@ out.push('| --- | --- | --- |');
 const row = (label: string, f: (t: Totals) => string) => out.push(`| ${label} | ${f(all)} | ${f(ok)} |`);
 row('items (weapon found / config items)', (t) => frac(t.found, t.items));
 row('**items that behave like the config in game** (CS2Fixes; style differences allowed, cooldown ±1 s)', (t) => frac(t.inGame, t.found));
+row('**items whose handlers are written exactly like GFL** (same entries in the same order: keys and values as the mode writes them)', (t) => frac(t.written, t.found));
+row('GFL handler entries the tool writes exactly', (t) => frac(t.wSame, t.wG));
 row('items identical (handlers, triggers, type/event/mode/cooldown/maxuses)', (t) => frac(t.exact, t.found));
 row('items with the same handler and trigger ids', (t) => frac(t.structural, t.found));
 row('handler recall (config handlers the tool proposes)', (t) => frac(t.hM, t.hG));
@@ -466,12 +525,12 @@ out.push('| --- | --- | --- |');
 for (const [k, n] of [...all.problems.entries()].sort((a, b) => b[1] - a[1])) out.push(`| ${k} | ${n} | ${ok.problems.get(k) ?? 0} |`);
 out.push('');
 out.push('## Per map');
-out.push('| map | folder | ids found | in game | items exact | same ids | handlers recall | handlers precision | triggers recall | triggers precision | same event / mode / cooldown / maxuses |');
-out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+out.push('| map | folder | ids found | in game | written like GFL | items exact | same ids | handlers recall | handlers precision | triggers recall | triggers precision | same event / mode / cooldown / maxuses |');
+out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
 for (const r of [...results].sort((a, b) => a.mapName.localeCompare(b.mapName))) {
   const t = totals([r]);
   const fv = (f: Field) => pct(t.fields[f].same, t.fields[f].total);
-  out.push(`| ${r.mapName} | ${path.basename(r.folder)} | ${pct(r.foundRatio, 1)} | ${t.inGame}/${t.found} | ${t.exact}/${t.found} | ${t.structural}/${t.found} | ${frac(t.hM, t.hG)} | ${frac(t.hM, t.hT)} | ${frac(t.tM, t.tG)} | ${frac(t.tM, t.tT)} | ${fv('event')} / ${fv('mode')} / ${fv('cooldown')} / ${fv('maxuses')} |`);
+  out.push(`| ${r.mapName} | ${path.basename(r.folder)} | ${pct(r.foundRatio, 1)} | ${t.inGame}/${t.found} | ${t.written}/${t.found} | ${t.exact}/${t.found} | ${t.structural}/${t.found} | ${frac(t.hM, t.hG)} | ${frac(t.hM, t.hT)} | ${frac(t.tM, t.tG)} | ${frac(t.tM, t.tT)} | ${fv('event')} / ${fv('mode')} / ${fv('cooldown')} / ${fv('maxuses')} |`);
 }
 out.push('');
 const misPicked = results.filter((r) => r.loaderPick);

@@ -75,6 +75,8 @@ export function validateConfig(config: EntWatchConfig, graph: EntityGraph | null
       if ((h.mode === 3 || h.mode === 4) && !counter && !(h.maxuses && h.maxuses > 0)) {
         issues.push({ level: 'warning', itemUid: item.uid, handlerUid: h.uid, key: 'v.handlerNoMaxUses' });
       }
+      // CS2Fixes treats any handler in mode 5 as a counter and reads its entity as a math_counter
+      if (h.mode === 5 && !counter) issues.push({ level: 'warning', itemUid: item.uid, handlerUid: h.uid, key: 'v.mode5NotCounter' });
       if (!graph) continue;
       const ents = graph.byHammerId.get(h.hammerid) ?? [];
       if (ents.length === 0) {

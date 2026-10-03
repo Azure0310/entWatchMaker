@@ -2,10 +2,10 @@ import type { EntityGraph } from './graph';
 import { friendlyName, isWeaponEntity, type MapEntity } from './entity';
 import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entwatch';
 import { newHandler, newItem } from './entwatch';
-import { counterUse, hasSelfCooldown, inferCooldown } from './cooldown';
+import { analyzeUse, cooldownCounterOf, counterLimit, counterUse, hasSelfCooldown, inferCooldown } from './cooldown';
 import { suggestEvents } from './events';
 import { abilityReach, findSelectionTriggers, isKnife, stripsVia, switchedOnBy } from './triggers';
-import { HOOKABLE_TRIGGERS, abilityOutputs, hasUseOutput, isArmInput, isCounter, isFilter, isGameUi, isGate, isHousekeepingInput, isUseEntity, isUseLike, keyLabel } from './roles';
+import { HOOKABLE_TRIGGERS, abilityOutputs, hasUseOutput, isArmInput, isCounter, isFilter, isGameUi, isGate, isHousekeepingInput, isUseEntity, isUseLike } from './roles';
 import { minDistance, origin } from './position';
 
 export { HOOKABLE_TRIGGERS } from './roles';
@@ -62,6 +62,8 @@ export const KNOWN_OUTPUTS: Record<string, string[]> = {
 
 const GENERIC_OUTPUTS = ['OnUser1', 'OnUser2', 'OnUser3', 'OnUser4', 'OnKilled'];
 
+const labelOf = (x: MapEntity) => friendlyName(x.targetname) || x.classname;
+
 /** All output names an entity could plausibly fire: best guesses first, then class defaults. */
 export function outputChoices(e: MapEntity, graph?: EntityGraph): string[] {
   const set = new Set<string>();
@@ -106,8 +108,20 @@ function fireLimit(e: MapEntity, event: string | undefined): { uses: number; rea
 }
 
 /**
+ * Cooldowns up to this many seconds are an attack the holder fires again and again: the GFL configs
+ * switch its chat message off (53 of 62 mode 2 handlers), and with a longer ability next to it up to
+ * {@link SHORT_SIBLING_COOLDOWN} seconds (Healmage 8 s next to 40 s).
+ */
+const SPAM_COOLDOWN = 5;
+const SHORT_SIBLING_COOLDOWN = 10;
+
+/**
  * Guesses handler type/event, and the cooldown from Lock/Unlock style wiring when a graph is
  * given. With a graph the event is the output whose chain leads to the delayed Unlock/Enable.
+ * The mode follows what the use does, as the GFL configs write it: 2 with a cooldown, 3 when the
+ * ability can be used N times (an output that fires N times, a counter that stops it, a use that
+ * removes it), and 1 when nothing holds the next use back (cooldown 0, chat off: every use would
+ * be printed).
  */
 export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSuggestion {
   const s = suggestHandlerBase(e);
@@ -117,17 +131,32 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
       s.event = top.event;
       s.eventReason = top.reason;
     }
-    const cd = inferCooldown(graph, e, s.event);
-    if (cd) {
-      s.cooldown = cd.seconds;
-      s.cooldownReason = cd.reason;
-      if (s.mode === 1) s.mode = 2;
+    const use = analyzeUse(graph, e, s.event);
+    if (use.cooldown) {
+      s.cooldown = use.cooldown.seconds;
+      s.cooldownReason = use.cooldown.reason;
+      s.mode = 2;
     }
-    const limit = fireLimit(e, s.event);
+    const limit = fireLimit(e, s.event) ?? counterLimit(graph, e, s.event) ?? (use.closedForGood[0] ? { uses: 1, reason: use.closedForGood[0].reason } : null);
     if (limit) {
       s.maxuses = limit.uses;
       s.maxusesReason = limit.reason;
       s.mode = 3;
+    } else if (!use.cooldown) {
+      if (use.closedUntilOther.length > 0) {
+        s.mode = 2;
+        s.cooldown = 0;
+        s.cooldownReason = `the use locks ${use.closedUntilOther.map(labelOf).join(', ')} and only other wiring opens it again: fill in the cooldown`;
+      } else {
+        s.mode = 1;
+        s.cooldown = 0;
+        s.message = false;
+        s.modeReason = 'nothing the use sets off holds the next use back: no cooldown (mode 1; chat off, every use would be printed)';
+      }
+    }
+    if (s.mode === 2 && use.cooldown && use.cooldown.seconds <= SPAM_COOLDOWN) {
+      s.message = false;
+      s.modeReason = `a ${use.cooldown.seconds}s cooldown is an attack used over and over: chat off`;
     }
   } else if (graph) {
     // a counter the use steps by one counts uses: CS2Fixes announces each in mode 3 / 4 (its max
@@ -364,6 +393,83 @@ const FEEDBACK_CLASSES = new Set([
   'ambient_generic', 'point_soundevent', 'snd_event_point', 'env_fade', 'env_shake', 'env_screenoverlay', 'env_hudhint', 'env_instructor_hint',
 ]);
 const FEEDBACK_INPUTS = new Set(['color', 'alpha', 'startsound', 'stopsound', 'playsound', 'setsourceentity', 'startglowing', 'stopglowing', 'setglowcolor', 'setmessage', 'setintmessage', 'display', 'showhudhint']);
+
+/** Keys in the order the GFL configs list their handlers: the main attack first. */
+const KEY_ORDER = ['attack', 'attack2', 'use', 'reload', 'forward', 'back', 'moveleft', 'moveright', 'jump', 'duck', 'speed', 'walk'];
+
+function keyRank(key: string): number {
+  const i = KEY_ORDER.indexOf(key.replace(/^(pressed|unpressed)/i, '').toLowerCase());
+  return 1 + (i < 0 ? KEY_ORDER.length : i);
+}
+
+/** "rynnak3" -> "rynnak", "fire_relay_2" -> "fire_relay"; and the number ("" when there is none). */
+function levelSuffix(x: MapEntity): { base: string; n: number } {
+  const name = friendlyName(x.targetname).toLowerCase();
+  const m = /^(.*?)[_\-\s]*(\d+)$/.exec(name);
+  return m && m[1] ? { base: m[1], n: parseInt(m[2], 10) } : { base: name, n: 0 };
+}
+
+/**
+ * Copies of one ability for the item's levels: gates on the same key whose names differ only by a
+ * number and that all start disabled (the level picked at pickup enables one, ze_tesv_skyrim_p
+ * Dovahkiin: rynnak / rynnak2 / rynnak3). The GFL configs list the first one only.
+ */
+function levelVariants(chosen: Candidate[]): { keep: Candidate; drop: Candidate }[] {
+  const out: { keep: Candidate; drop: Candidate }[] = [];
+  const groups = new Map<string, Candidate[]>();
+  for (const c of chosen) {
+    if (!c.key || !isGate(c.entity) || c.entity.props.startdisabled !== '1') continue;
+    const { base } = levelSuffix(c.entity);
+    if (!base) continue;
+    const k = `${c.key.ui.id}|${c.key.key}|${c.entity.classname}|${base}`;
+    groups.set(k, [...(groups.get(k) ?? []), c]);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const keep = group.reduce((a, b) => (levelSuffix(b.entity).n < levelSuffix(a.entity).n ? b : a));
+    for (const c of group) if (c !== keep) out.push({ keep, drop: c });
+  }
+  return out;
+}
+
+/**
+ * A gate fired by the same press (the same entity and output) as a counter that counts the uses:
+ * the counter reports the use with its count and cooldown, the gate would print it a second time.
+ * The GFL configs never list both (1 item in 1775 has a use counter and an event handler).
+ */
+function countedTwice(graph: EntityGraph, chosen: Candidate[]): { counter: Candidate; drop: Candidate }[] {
+  const feeders = (x: MapEntity) =>
+    new Set(graph.incomingConnections(x).filter(({ connection }) => !isHousekeepingInput(connection.input)).map(({ from, connection }) => `${from.id}|${connection.output.toLowerCase()}`));
+  const out: { counter: Candidate; drop: Candidate }[] = [];
+  for (const k of chosen) {
+    if (!isCounter(k.entity) || !counterUse(graph, k.entity)) continue;
+    const fk = feeders(k.entity);
+    for (const g of chosen) {
+      if (g === k || !(isGate(g.entity) || isFilter(g.entity)) || out.some((o) => o.drop === g)) continue;
+      if ([...feeders(g.entity)].some((f) => fk.has(f))) out.push({ counter: k, drop: g });
+    }
+  }
+  return out;
+}
+
+const NAME_NOISE = new Set([
+  'relay', 'rel', 'r', 'case', 'compare', 'branch', 'logic', 'item', 'items', 'weapon', 'wep', 'wpn', 'button', 'btn', 'filter',
+  'counter', 'timer', 'trigger', 'trig', 'ui', 'the', 'ability', 'skill', 'use', 'attack', 'attk', 'atk', 'zombie', 'zm', 'human',
+]);
+
+/**
+ * Names for abilities sharing one key, from what sets their targetnames apart: shout_fire /
+ * shout_freeze / shout_push -> Fire / Freeze / Push (as GFL names them). Nothing when a name would
+ * be a number or a filler word.
+ */
+function abilityNames(ents: MapEntity[]): (string | undefined)[] {
+  const words = ents.map((x) => friendlyName(x.targetname).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+  const common = new Set(words[0].filter((w) => words.every((ws) => ws.includes(w))));
+  const own = words.map((ws) => ws.filter((w) => !common.has(w) && !NAME_NOISE.has(w) && /^[a-z]{3,}$/.test(w)));
+  const pretty = own.map((ws) => ws.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '));
+  if (pretty.some((n) => !n) || new Set(pretty).size !== pretty.length) return ents.map(() => undefined);
+  return pretty;
+}
 
 /** `e` only answers the player: flashes a model, plays a sound, shows a text. */
 function feedbackOnly(graph: EntityGraph, e: MapEntity): boolean {
@@ -638,6 +744,19 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       continue;
     }
     if (fed || selfCd || c.pickupEnabled || (c.tier <= 2 && gateCount === 1)) {
+      // N uses, then the counter it steps holds the item back: the counter reports both (mode 4)
+      const counter = isCounter(x) ? null : cooldownCounterOf(graph, x);
+      if (counter && counter.hammerId && !included.has(counter.id)) {
+        consider(counter, `counts the uses of ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: true });
+        const nc = byId.get(counter.id);
+        if (nc) {
+          decided.add(counter.id);
+          included.add(counter.id);
+          chosen.push({ c: nc, extra: `counts the uses of ${label(x)} and holds the item back at its limit` });
+          skipped.push(`${label(x)} (${x.classname}, steps ${label(counter)}, which counts its uses and starts the cooldown at its limit: the counter reports the use)`);
+          continue;
+        }
+      }
       included.add(x.id);
       chosen.push({
         c,
@@ -674,12 +793,31 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     if (behind.length === 0) chosen.push({ c, extra: 'no relay behind its key outputs, so the ui reports the press itself' });
     else notes.push(`game_ui ${label(ui)}: ${behind.map(({ c: o }) => `${o.key?.key ?? 'output'} → ${label(o.entity)}`).join(', ')}`);
   }
-  const keysPerUi = new Map<number, Set<string>>();
+  // ---- the shape GFL gives the list --------------------------------------------------------------
+  for (const v of levelVariants(chosen.map(({ c }) => c))) {
+    const at = chosen.findIndex(({ c }) => c === v.drop);
+    if (at >= 0) chosen.splice(at, 1);
+    skipped.push(`${label(v.drop.entity)} (a copy of ${label(v.keep.entity)} for another item level: starts disabled, fired by the same key; GFL lists one)`);
+  }
+  for (const d of countedTwice(graph, chosen.map(({ c }) => c))) {
+    const at = chosen.findIndex(({ c }) => c === d.drop);
+    if (at >= 0) chosen.splice(at, 1);
+    skipped.push(`${label(d.drop.entity)} (the same press steps ${label(d.counter.entity)}, which already reports the use with its count)`);
+  }
+  // +use entities first, then the rest, keys in the order Attack, Attack2, ... (stable otherwise)
+  const rank = (c: Candidate) => (isUseEntity(c.entity) && !isGameUi(c.entity) ? -1 : c.key ? keyRank(c.key.key) : 0);
+  chosen.sort((a, b) => rank(a.c) - rank(b.c));
+  // several abilities on one key (a shout that cycles fire / freeze / push) are told apart by name
+  const names = new Map<Candidate, string>();
+  const byKey = new Map<string, Candidate[]>();
   for (const { c } of chosen) {
     if (!c.key) continue;
-    const set = keysPerUi.get(c.key.ui.id) ?? new Set<string>();
-    set.add(c.key.key);
-    keysPerUi.set(c.key.ui.id, set);
+    const k = `${c.key.ui.id}|${c.key.key}`;
+    byKey.set(k, [...(byKey.get(k) ?? []), c]);
+  }
+  for (const group of byKey.values()) {
+    if (group.length < 2) continue;
+    abilityNames(group.map((c) => c.entity)).forEach((n, i) => n && names.set(group[i], n));
   }
 
   const triggers: string[] = [];
@@ -703,7 +841,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     const ent = c.entity;
     const s = suggestHandler(ent, graph);
     const h: HandlerConfig = newHandler({
-      name: c.key && (keysPerUi.get(c.key.ui.id)?.size ?? 0) >= 2 ? keyLabel(c.key.key) : undefined,
+      name: names.get(c),
       type: s.type,
       hammerid: ent.hammerId,
       event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
@@ -740,13 +878,10 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   item.triggers = triggers;
 
   // When a filter / relay / counter handler follows the button, the button entry only needs to hook
-  // +use (the GFL convention: {"type": "button", "hammerid": "..."}); messages come from the follow-up.
-  // A counter shown as a value announces nothing, so then the button keeps reporting the press.
-  const hasFollowUp = item.handlers.some((h) => h.type !== 'button' && h.message !== false);
-  if (item.handlers.some((h) => h.type === 'button') && !hasFollowUp && item.handlers.some((h) => h.type !== 'button')) {
-    notes.push('the handlers behind the button announce nothing (a counter shown as a value), so the button reports the press');
-  }
-  if (hasFollowUp) {
+  // +use (the GFL convention: {"type": "button", "hammerid": "..."}); the follow-up reports the use.
+  // That holds for a counter shown as a value too: GFL writes such items as a plain hook and the
+  // counter (34 items), never as a button that announces the press next to it.
+  if (item.handlers.some((h) => h.type !== 'button')) {
     for (const h of item.handlers) {
       if (h.type !== 'button') continue;
       h.mode = 1;
@@ -757,6 +892,16 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       h.maxuses = 0;
     }
   }
+  // a quick attack next to a longer ability of the same item is used over and over: GFL keeps its
+  // chat message off (Healmage 8 s next to 40 s, Archmage 9 s next to 60 s)
+  const longest = Math.max(0, ...item.handlers.filter((h) => h.mode >= 2 && h.mode <= 4).map((h) => h.cooldown ?? 0));
+  for (const h of item.handlers) {
+    if (h.mode !== 2 || !h.message || !(h.cooldown && h.cooldown <= SHORT_SIBLING_COOLDOWN) || longest <= h.cooldown) continue;
+    h.message = false;
+    notes.push(`message off for ${h.hammerid}: a ${h.cooldown}s attack next to a ${longest}s ability is used over and over`);
+  }
+  // GFL spells transfer out for every item; CS2Fixes would pick the same (off for knives)
+  item.transfer = !isKnife(e);
   if (item.handlers.length === 0) {
     notes.push(candidates.length === 0
       ? 'Nothing is wired to or grouped with this weapon (no parent, no template, no outputs). Use the I/O search (e.g. "in:unlock") to find the ability entities and add them with "+".'

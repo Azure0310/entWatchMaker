@@ -82,6 +82,50 @@ export function newHandler(partial: Partial<HandlerConfig> = {}): HandlerConfig 
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// What each mode uses (CS2Fixes EWItemHandler::Use / UseCounter / UpdateHudText)
+// ---------------------------------------------------------------------------------------------
+
+/** counterup / counterdown: CS2Fixes forces their event to OutValue and reads their uses from the math_counter's min / max. */
+export function isCounterHandler(h: Pick<HandlerConfig, 'type'>): boolean {
+  return h.type === 'counterup' || h.type === 'counterdown';
+}
+
+/** The cooldown only counts in mode 2 (Cooldown), 3 (MaxUses, between uses) and 4 (CooldownAfterUses). */
+export function usesCooldown(h: Pick<HandlerConfig, 'mode'>): boolean {
+  return h.mode === 2 || h.mode === 3 || h.mode === 4;
+}
+
+/** maxuses only counts in modes 3 / 4, and never for counters (their min / max decide). */
+export function usesMaxUses(h: Pick<HandlerConfig, 'type' | 'mode'>): boolean {
+  return (h.mode === 3 || h.mode === 4) && !isCounterHandler(h);
+}
+
+/** Mode 5 shows a counter's value: CS2Fixes never prints a use in it, so message means nothing there. */
+export function usesMessage(h: Pick<HandlerConfig, 'mode'>): boolean {
+  return h.mode !== 5;
+}
+
+/** A plain +use hook: {"type": "button", "hammerid": "..."} (CS2Fixes only stops other players using it). */
+export function isPlainButton(h: Pick<HandlerConfig, 'type' | 'mode' | 'event' | 'message' | 'ui'>): boolean {
+  return h.type === 'button' && h.mode <= 1 && !h.event && !h.message && !h.ui;
+}
+
+/**
+ * The handler as CS2Fixes sees it: cooldown 0 where the mode ignores it, maxuses 0 unless mode 3 /
+ * 4 on a non-counter, no event on counters, message off in mode 5. The writer outputs these values
+ * and leaves out what the mode does not read, like the GFL configs.
+ */
+export function effectiveHandler(h: HandlerConfig): HandlerConfig {
+  return {
+    ...h,
+    event: isCounterHandler(h) ? undefined : h.event,
+    cooldown: usesCooldown(h) ? (h.cooldown ?? 0) : 0,
+    maxuses: usesMaxUses(h) ? (h.maxuses ?? 0) : 0,
+    message: usesMessage(h) ? h.message : false,
+  };
+}
+
 export function newItem(partial: Partial<ItemConfig> = {}): ItemConfig {
   return {
     uid: newUid('i'),
@@ -154,11 +198,17 @@ export function serializeEntWatchConfig(config: EntWatchConfig, opts: SerializeO
       out.push(`${i2}"templated": ${item.templated}${hasTriggers || hasHandlers ? ',' : ''}`);
     }
     if (hasTriggers) {
-      out.push(`${i2}"triggers": [`);
-      item.triggers.forEach((t, ti) => {
-        out.push(line([q(t)], describe(t), i3, ti === item.triggers.length - 1));
-      });
-      out.push(`${i2}]${hasHandlers ? ',' : ''}`);
+      const comments = item.triggers.map((t) => describe(t));
+      if (comments.some((c) => c)) {
+        out.push(`${i2}"triggers": [`);
+        item.triggers.forEach((t, ti) => {
+          out.push(line([q(t)], comments[ti], i3, ti === item.triggers.length - 1));
+        });
+        out.push(`${i2}]${hasHandlers ? ',' : ''}`);
+      } else {
+        // the GFL layout: "triggers": ["992"],
+        out.push(`${i2}"triggers": [${item.triggers.map(q).join(', ')}]${hasHandlers ? ',' : ''}`);
+      }
     }
     if (hasHandlers) {
       out.push(`${i2}"handlers": [`);
@@ -171,25 +221,27 @@ export function serializeEntWatchConfig(config: EntWatchConfig, opts: SerializeO
         // unknown/missing type as "other")
         if (h.type !== 'other') rows.push({ text: `"type": ${q(h.type)}` });
         rows.push({ text: `"hammerid": ${q(h.hammerid)}`, comment: describe(h.hammerid) });
-        if (h.type === 'button' || h.type === 'other') {
-          if (h.event) rows.push({ text: `"event": ${q(h.event)}` });
-        }
-        const plainButton = h.type === 'button' && h.mode <= 1 && !h.event && !h.message && !h.ui;
-        if (plainButton) {
+        if (isPlainButton(h)) {
           if (h.templated !== undefined) rows.push({ text: `"templated": ${h.templated}` });
           rows.forEach((row, ri) => out.push(line([row.text], row.comment, i4, ri === rows.length - 1)));
           out.push(`${i3}}${lastHandler ? '' : ','}`);
           return;
         }
+        // only what the mode reads, as the GFL configs write it: counters never carry an event or
+        // maxuses (CS2Fixes takes OutValue and their min / max), mode 5 (a value) has no cooldown
+        // and announces nothing, and modes without a cooldown / max uses write 0
+        const counter = isCounterHandler(h);
+        const eff = effectiveHandler(h);
+        if (!counter && h.event) rows.push({ text: `"event": ${q(h.event)}` });
         rows.push({ text: `"mode": ${h.mode}` });
-        if (h.type === 'counterup' || h.type === 'counterdown') {
-          if (h.offset && (h.offset[0] !== 0 || h.offset[1] !== 0)) {
-            rows.push({ text: `"offset": [${num(h.offset[0])}, ${num(h.offset[1])}]` });
-          }
+        if (counter && h.offset && (h.offset[0] !== 0 || h.offset[1] !== 0)) {
+          rows.push({ text: `"offset": [${num(h.offset[0])}, ${num(h.offset[1])}]` });
         }
-        rows.push({ text: `"cooldown": ${num(h.cooldown)}` });
-        rows.push({ text: `"maxuses": ${num(h.maxuses)}` });
-        rows.push({ text: `"message": ${h.message}` });
+        if (h.mode !== 5) {
+          rows.push({ text: `"cooldown": ${num(eff.cooldown)}` });
+          if (!counter) rows.push({ text: `"maxuses": ${num(eff.maxuses)}` });
+          rows.push({ text: `"message": ${eff.message}` });
+        }
         rows.push({ text: `"ui": ${h.ui}` });
         if (h.templated !== undefined) rows.push({ text: `"templated": ${h.templated}` });
         rows.forEach((row, ri) => out.push(line([row.text], row.comment, i4, ri === rows.length - 1)));

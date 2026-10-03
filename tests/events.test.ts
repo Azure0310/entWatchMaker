@@ -65,8 +65,9 @@ describe('event inference', () => {
 });
 
 // Optional robustness check against the GFL config corpus when it is available locally.
-const corpus = process.env.GFL_ENTWATCH_DIR ?? '/tmp/claude-0/-home-user-entWatchMaker/355b27c7-f920-5d83-b0ac-bd7eff2b43c0/scratchpad/CS2-ZE-Configs/entwatch';
-describe.skipIf(!existsSync(corpus))('GFL corpus', () => {
+// Point GFL_ENTWATCH_DIR at a checkout of gflze/CS2-ZE-Configs/entwatch to run it.
+const corpus = process.env.GFL_ENTWATCH_DIR ?? '';
+describe.skipIf(!corpus || !existsSync(corpus))('GFL corpus', () => {
   it('parses every config and round trips the item count', () => {
     const files = readdirSync(corpus).filter((f) => f.endsWith('.jsonc'));
     expect(files.length).toBeGreaterThan(100);
@@ -85,5 +86,16 @@ describe.skipIf(!existsSync(corpus))('GFL corpus', () => {
       }
     }
     expect(items).toBeGreaterThan(1500);
+  });
+
+  it('writes most configs back exactly as GFL wrote them', () => {
+    // read → write without comments gives the same text; what is left are minority styles (mode 2
+    // without maxuses, GFL's own "type": "counter" / mode 6, message on mode 5 counters)
+    const files = readdirSync(corpus).filter((f) => f.endsWith('.jsonc') && f !== 'template.jsonc');
+    const same = files.filter((f) => {
+      const text = readFileSync(path.join(corpus, f), 'utf8').replace(/\r\n/g, '\n');
+      return serializeEntWatchConfig(parseEntWatchConfig(text).config, { comments: false }).trim() === text.trim();
+    });
+    expect(same.length).toBeGreaterThanOrEqual(140);
   });
 });

@@ -235,7 +235,11 @@ interface GateEvents {
   opens: { t: number; reason: string }[];
   /** Locked and unlocked (Lock / Disable, Unlock / Enable), not only a stored value changed. */
   locked: boolean;
+  /** The use removes it (Kill): nothing can open it again. */
+  killed?: string;
 }
+
+const KILL_INPUTS = new Set(['kill', 'killhierarchy']);
 
 /** Closings and reopenings of everything the steps reach, per entity. */
 function gateEvents(steps: Step[]): Map<number, GateEvents> {
@@ -249,7 +253,9 @@ function gateEvents(steps: Step[]): Map<number, GateEvents> {
     const input = s.c.input.toLowerCase();
     for (const x of s.targets) {
       const why = (extra = '') => `${label(s.from)} ${s.c.output} → ${label(x)} ${s.c.input}${extra} (${round(s.t)}s after the use)`;
-      if (DISABLE_INPUTS.has(input)) {
+      if (KILL_INPUTS.has(input)) {
+        if (!of(x).killed) of(x).killed = why();
+      } else if (DISABLE_INPUTS.has(input)) {
         of(x).closes.push(s.t);
         of(x).locked = true;
       } else if (REENABLE_INPUTS.has(input)) of(x).opens.push({ t: s.t, reason: why() });
@@ -298,10 +304,65 @@ function buttonWait(e: MapEntity): number | null {
 const round = (s: number) => (Math.abs(s - Math.round(s)) <= 0.05 ? Math.round(s) : Math.round(s * 100) / 100);
 
 /**
+ * Seconds as the GFL configs write a cooldown: whole seconds (1316 of 1338) or an exact half
+ * (2.5, 7.5). Other fractions are cut to the second below (an Enable after 3.75 s is written 3,
+ * after 2.15 s 2), except a hair under the next second (59.9 is 60). Writing a little less never
+ * changes anything in game: CS2Fixes lets a use through a second early anyway.
+ */
+export function configSeconds(s: number): number {
+  const r = round(s);
+  if (Number.isInteger(r)) return r;
+  const whole = Math.floor(r);
+  const frac = r - whole;
+  if (Math.abs(frac - 0.5) < 0.01) return whole + 0.5;
+  return frac >= 0.9 - 1e-9 ? whole + 1 : whole;
+}
+
+/** `from` fires `to` through up to `hops` entities with inputs that do something (not Kill / Lock / ...). */
+function leadsTo(graph: EntityGraph, from: MapEntity, to: MapEntity, hops = 6): boolean {
+  let frontier = [from];
+  const seen = new Set([from.id]);
+  for (let d = 0; d < hops && frontier.length > 0; d++) {
+    const next: MapEntity[] = [];
+    for (const x of frontier) {
+      for (const c of x.connections) {
+        if (!carriesOn(c.input)) continue;
+        for (const t of graph.connectionTargets(x, c)) {
+          if (t.id === to.id) return true;
+          if (!seen.has(t.id)) {
+            seen.add(t.id);
+            next.push(t);
+          }
+        }
+      }
+    }
+    frontier = next;
+  }
+  return false;
+}
+
+export interface UseAnalysis {
+  /** The cooldown, or null when the use locks nothing for longer than a double-press guard. */
+  cooldown: CooldownGuess | null;
+  /**
+   * The use closes a gate it goes through for good: kills the handler or the button in front of
+   * it, or locks / disables one that nothing in the map opens again. The item can be used once.
+   */
+  closedForGood: { entity: MapEntity; reason: string }[];
+  /** Closed by the use and opened again only by other wiring, without a delay to read. */
+  closedUntilOther: MapEntity[];
+}
+
+/**
  * Infers the cooldown of handler `e` (firing `event` when known). Returns the time until every gate
  * the use goes through is open again, or null when the use locks nothing (or only for a moment).
  */
 export function inferCooldown(graph: EntityGraph, e: MapEntity, event?: string): CooldownGuess | null {
+  return analyzeUse(graph, e, event).cooldown;
+}
+
+/** What the use of handler `e` does to the gates it goes through: its cooldown, or that it closes them for good. */
+export function analyzeUse(graph: EntityGraph, e: MapEntity, event?: string): UseAnalysis {
   const front = inFront(graph, e);
   const isFront = (x: MapEntity) => x.id === e.id || front.ids.has(x.id);
   const own = { e, first: event ? (o: string) => o.toLowerCase() === event.toLowerCase() : defaultUseOutputs(e) };
@@ -328,6 +389,7 @@ export function inferCooldown(graph: EntityGraph, e: MapEntity, event?: string):
   // same press may also fire other abilities, whose resets are not this handler's cooldown), then
   // what locks a button that fires nothing.
   let stillClosed: MapEntity[] = [];
+  const killed: { entity: MapEntity; reason: string }[] = [];
   for (const starts of [[own], [own, ...fromRoots], ...(lockers.length > 0 ? [lockers] : [])]) {
     const steps = useTimeline(graph, starts);
     // the use path: e, what feeds it, and whatever the chain carries on to
@@ -345,15 +407,30 @@ export function inferCooldown(graph: EntityGraph, e: MapEntity, event?: string):
     // relay the ultimate disables (not a boss branch it only arms)
     const lockedOffPath = (ev: GateEvents | undefined) => !!ev && ev.locked && ev.opens.length > 0;
     for (const ev of events.values()) if (lockedOffPath(ev)) gates.set(ev.gate.id, ev.gate);
+    // a button further back than the path in front is followed (button → filter → counter →
+    // compare → relay) that the use removes or locks without opening it again
+    const deep = new Set<number>();
+    for (const ev of events.values()) {
+      const shut = !!ev.killed || (ev.locked && ev.opens.length === 0);
+      if (shut && isUseEntity(ev.gate) && !gates.has(ev.gate.id) && leadsTo(graph, ev.gate, e)) {
+        deep.add(ev.gate.id);
+        gates.set(ev.gate.id, ev.gate);
+      }
+    }
     for (const x of gates.values()) {
-      const onPath = path.has(x.id);
-      if (!canGate(x, isFront(x))) continue;
+      const front = isFront(x) || deep.has(x.id);
+      const onPath = path.has(x.id) || deep.has(x.id);
+      if (!canGate(x, front)) continue;
       const ev = events.get(x.id);
+      // the handler itself, or the button / gate the use comes through, removed by the use: a one-off
+      if (ev?.killed && (x.id === e.id || front) && !killed.some((k) => k.entity.id === x.id)) {
+        killed.push({ entity: x, reason: ev.killed });
+      }
       if (!onPath && !lockedOffPath(ev)) continue;
       // buttons also lock themselves (spawnflags, wait -1), so a delayed Unlock counts on its own
       const r = reopening(ev, onPath && isUseEntity(x));
       if (r === 'closed') {
-        if (isFront(x) || isUseEntity(x)) stillClosed.push(x);
+        if (front || isUseEntity(x)) stillClosed.push(x);
       } else if (r) found.push({ seconds: r.t, reason: r.reason, entity: x });
     }
     if (found.length === 0) continue;
@@ -361,16 +438,30 @@ export function inferCooldown(graph: EntityGraph, e: MapEntity, event?: string):
     // use goes through before the handler (a relay further on may be reset by another ability too)
     const pool = found.some((g) => isFront(g.entity)) ? found.filter((g) => isFront(g.entity)) : found;
     const best = pool.reduce((a, b) => (b.seconds > a.seconds ? b : a));
-    return { ...best, seconds: round(best.seconds) };
+    return { cooldown: { ...best, seconds: configSeconds(best.seconds) }, closedForGood: [], closedUntilOther: [] };
   }
+  if (killed.length > 0) return { cooldown: null, closedForGood: killed, closedUntilOther: [] };
   // the use locks the button (or a gate in front) and something else opens it again: a minigame
   // that ends, a respawned item. The delay of that reopening is the best guess.
   const elsewhere = stillClosed
     .flatMap((x) => [...reenableDelays(graph, x), ...valueResetDelays(graph, x)])
     .filter((g) => g.seconds > ANTI_SPAM_SECONDS);
-  if (elsewhere.length === 0) return null;
-  const best = elsewhere.reduce((a, b) => (b.seconds > a.seconds ? b : a));
-  return { ...best, seconds: round(best.seconds), reason: `${best.reason}; the use locks it and other wiring opens it again` };
+  if (elsewhere.length > 0) {
+    const best = elsewhere.reduce((a, b) => (b.seconds > a.seconds ? b : a));
+    return {
+      cooldown: { ...best, seconds: configSeconds(best.seconds), reason: `${best.reason}; the use locks it and other wiring opens it again` },
+      closedForGood: [],
+      closedUntilOther: [],
+    };
+  }
+  // nothing in the map opens it again at all: the use was the last one
+  const reopened = (x: MapEntity) =>
+    aimedAt(graph, x).some(({ c }) => REENABLE_INPUTS.has(c.input.toLowerCase()) || VALUE_INPUTS.has(c.input.toLowerCase()));
+  return {
+    cooldown: null,
+    closedForGood: stillClosed.filter((x) => !reopened(x)).map((x) => ({ entity: x, reason: `the use locks ${label(x)} and nothing opens it again` })),
+    closedUntilOther: stillClosed.filter(reopened),
+  };
 }
 
 // ---- counters ------------------------------------------------------------------------------------
@@ -433,6 +524,63 @@ export function counterUse(graph: EntityGraph, counter: MapEntity): CounterUse |
 }
 
 /**
+ * A counter `gate` steps by one per use that, at its limit, holds the item back for a while and
+ * starts over (CS2Fixes mode 4, CooldownAfterUses: N uses, then a cooldown). Only when nothing
+ * else steps it. The GFL configs list such a counter rather than the gate in front of it
+ * (ze_lotr_minas_tirith_p Oil Barrel: two barrels, then 60 s).
+ */
+export function cooldownCounterOf(graph: EntityGraph, gate: MapEntity): MapEntity | null {
+  for (const c of gate.connections) {
+    const step = stepOf(c);
+    if (step === null || Math.abs(step) !== 1) continue;
+    for (const t of graph.connectionTargets(gate, c)) {
+      if (!isCounter(t)) continue;
+      if (aimedAt(graph, t).some(({ from, c: k }) => from.id !== gate.id && from.id !== t.id && stepOf(k) !== null)) continue;
+      if (counterUse(graph, t)?.afterUses) return t;
+    }
+  }
+  return null;
+}
+
+/**
+ * Uses allowed by a counter the handler's own use steps by one and that removes or locks the
+ * handler (or the button in front of it) when it reaches its limit: max - start counting up,
+ * start - min counting down. The GFL configs write such a handler in mode 3 with that many max
+ * uses (ze_tesv_skyrim_p Daedric: the nuke relay adds 1 to a counter that kills it at 2).
+ */
+export function counterLimit(graph: EntityGraph, e: MapEntity, event?: string): { uses: number; reason: string; counter: MapEntity } | null {
+  if (isCounter(e)) return null;
+  const front = inFront(graph, e);
+  const steps = useTimeline(graph, [{ e, first: event ? (o: string) => o.toLowerCase() === event.toLowerCase() : defaultUseOutputs(e) }]);
+  for (const s of steps) {
+    const step = stepOf(s.c);
+    if (step === null || Math.abs(step) !== 1 || s.from.id !== e.id) continue;
+    for (const x of s.targets) {
+      if (!isCounter(x) || !counterUse(graph, x)) continue;
+      const limit = step > 0 ? 'onhitmax' : 'onhitmin';
+      const stops = x.connections.some(
+        (c) =>
+          c.output.toLowerCase() === limit &&
+          (KILL_INPUTS.has(c.input.toLowerCase()) || DISABLE_INPUTS.has(c.input.toLowerCase())) &&
+          targetsOf(graph, x, c).some((t) => t.id === e.id || (front.ids.has(t.id) && isUseEntity(t))),
+      );
+      if (!stops) continue;
+      const max = parseFloat(x.props.max ?? '');
+      const min = parseFloat(x.props.min ?? '');
+      const start = parseFloat(x.props.startvalue ?? '') || 0;
+      const uses = step > 0 ? max - start : start - min;
+      if (!Number.isInteger(uses) || uses < 1) continue;
+      return {
+        uses,
+        counter: x,
+        reason: `${label(e)} ${s.c.output} → ${label(x)} ${s.c.input} ${s.c.param || '1'}, which stops it at ${step > 0 ? `OnHitMax (max ${max})` : `OnHitMin (min ${min})`}: ${uses} uses`,
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Mode 4 (CooldownAfterUses): reaching the limit (OnHitMax counting up, OnHitMin counting down)
  * locks the item, and a delayed Unlock / Enable or a reset of the counter frees it again.
  */
@@ -454,5 +602,5 @@ function cooldownAfterUses(graph: EntityGraph, counter: MapEntity, type: Counter
   }
   if (found.length === 0) return null;
   const best = found.reduce((a, b) => (b.seconds > a.seconds ? b : a));
-  return { ...best, seconds: round(best.seconds) };
+  return { ...best, seconds: configSeconds(best.seconds) };
 }

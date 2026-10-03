@@ -156,6 +156,8 @@ table.io td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-a
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 .grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
 .grid label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--fg); }
+.grid label.unused { opacity: 0.55; }
+.grid label.unused .input { text-decoration: line-through; }
 .pair { display: flex; gap: 6px; align-items: center; }
 .handler { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 8px; background: var(--bg); }
 .handler-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }

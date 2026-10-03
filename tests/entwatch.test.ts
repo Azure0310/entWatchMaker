@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newHandler, newItem, parseEntWatchConfig, serializeEntWatchConfig, stripJsonComments } from '../src/model/entwatch';
+import { effectiveHandler, newHandler, newItem, parseEntWatchConfig, serializeEntWatchConfig, stripJsonComments, usesCooldown, usesMaxUses } from '../src/model/entwatch';
 
 const sample = `[
     {
@@ -74,4 +74,44 @@ describe('entwatch jsonc', () => {
     expect(parsed[0].handlers[1].event).toBe('OnPressed');
     expect(parsed[0].shortname).toBe('X');
   });
+
+  it('writes only the fields each mode reads, in the GFL layout', () => {
+    const handlers = [
+      newHandler({ type: 'button', hammerid: '10', event: undefined, mode: 1, message: false, ui: false }),
+      // stale numbers the mode ignores are written as 0
+      newHandler({ type: 'other', hammerid: '11', event: 'OnPass', mode: 1, cooldown: 45, maxuses: 3, message: false }),
+      newHandler({ type: 'other', hammerid: '12', event: 'OnTrigger', mode: 2, cooldown: 60, maxuses: 9 }),
+      newHandler({ type: 'button', hammerid: '13', event: 'OnPressed', mode: 3, cooldown: 10, maxuses: 2 }),
+      // counters: no event, no maxuses (CS2Fixes forces OutValue and reads min / max)
+      newHandler({ type: 'counterup', hammerid: '14', event: 'OnPass', mode: 3, cooldown: 4, maxuses: 5 }),
+      newHandler({ type: 'counterdown', hammerid: '15', mode: 4, cooldown: 60 }),
+      // a value: no cooldown, no maxuses, no message
+      newHandler({ type: 'counterdown', hammerid: '16', mode: 5, cooldown: 30, maxuses: 2, message: true, offset: [0, -1980] }),
+    ];
+    const text = serializeEntWatchConfig({ items: [newItem({ name: 'X', hammerid: '1', transfer: true, handlers })] }, { comments: false });
+    expect(JSON.parse(text)[0].handlers).toEqual([
+      { type: 'button', hammerid: '10' },
+      { hammerid: '11', event: 'OnPass', mode: 1, cooldown: 0, maxuses: 0, message: false, ui: true },
+      { hammerid: '12', event: 'OnTrigger', mode: 2, cooldown: 60, maxuses: 0, message: true, ui: true },
+      { type: 'button', hammerid: '13', event: 'OnPressed', mode: 3, cooldown: 10, maxuses: 2, message: true, ui: true },
+      { type: 'counterup', hammerid: '14', mode: 3, cooldown: 4, message: true, ui: true },
+      { type: 'counterdown', hammerid: '15', mode: 4, cooldown: 60, message: true, ui: true },
+      { type: 'counterdown', hammerid: '16', mode: 5, offset: [0, -1980], ui: true },
+    ]);
+    // key order as GFL writes it
+    expect(text).toContain('"hammerid": "12",\n                "event": "OnTrigger",\n                "mode": 2,\n                "cooldown": 60,\n                "maxuses": 0,\n                "message": true,\n                "ui": true\n');
+    expect(text).toContain('"type": "counterdown",\n                "hammerid": "16",\n                "mode": 5,\n                "offset": [0, -1980],\n                "ui": true\n');
+    expect(usesCooldown(handlers[1])).toBe(false);
+    expect(usesMaxUses(handlers[4])).toBe(false);
+    expect(effectiveHandler(handlers[6])).toMatchObject({ cooldown: 0, maxuses: 0, message: false });
+  });
+
+  it('writes triggers on one line when there are no comments, like GFL', () => {
+    const item = newItem({ name: 'Nightingale', hammerid: '29345', transfer: false, color: 'silver', triggers: ['992'] });
+    const text = serializeEntWatchConfig({ items: [item] }, { comments: false });
+    expect(text).toContain('        "transfer": false,\n        "color": "silver",\n        "triggers": ["992"]\n    }');
+    const commented = serializeEntWatchConfig({ items: [item] }, { describeHammerId: (h) => (h === '992' ? 'trigger_teleport tp' : undefined) });
+    expect(commented).toContain('"992" // trigger_teleport tp');
+  });
 });
+

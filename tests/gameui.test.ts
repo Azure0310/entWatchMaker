@@ -25,15 +25,19 @@ describe('game_ui implemented as a logic_case script', () => {
     expect(hasUseOutput(byName('heal_physbox'))).toBe(true);
   });
 
-  it('hands the handlers to the relays behind the keys, named after the key', () => {
+  it('hands the handlers to the relays behind the keys, main attack first and unnamed like GFL', () => {
     const { item, notes } = suggestItemForWeapon(byName('dragon_knife'), graph);
     expect(item.handlers.map((h) => h.hammerid)).toEqual(['2602', '2603']);
     const [attk, nuke] = item.handlers;
-    expect(attk.name).toBe('Attack');
+    // GFL never names handlers after the key (skyrim Healmage / Archmage: two keys, no names)
+    expect(attk.name).toBeUndefined();
     expect(attk.event).toBe('OnTrigger');
     expect(attk.cooldown).toBe(5);
-    expect(nuke.name).toBe('Attack2');
+    // a 5 s attack is fired over and over: chat off, as GFL writes it
+    expect(attk.message).toBe(false);
+    expect(nuke.name).toBeUndefined();
     expect(nuke.cooldown).toBe(60);
+    expect(nuke.message).toBe(true);
     expect(nuke.type).toBe('other');
     // the ui itself, the housekeeping physbox and the output-less filter are not handlers
     expect(notes.some((n) => n.includes('dragon_phbox') && n.includes('housekeeping'))).toBe(true);
@@ -55,9 +59,12 @@ describe('game_ui implemented as a logic_case script', () => {
   it('follows the template chain: maker origin + local origin, &0000 names, ForceSpawn trigger', () => {
     const { item, notes } = suggestItemForWeapon(byName('[PR#]ww_knife&0000'), graph);
     expect(item.handlers.map((h) => h.hammerid)).toEqual(['2511', '2512']);
-    expect(item.handlers.map((h) => h.name)).toEqual(['Attack', 'Attack2']);
-    // the attack relay re-enables itself after 2s: a double-press guard, not a cooldown
+    expect(item.handlers.map((h) => h.name)).toEqual([undefined, undefined]);
+    // the attack relay re-enables itself after 2s: a double-press guard, not a cooldown, so the
+    // attack has no cooldown at all (mode 1, chat off)
     expect(item.handlers.map((h) => h.cooldown)).toEqual([0, 25]);
+    expect(item.handlers.map((h) => h.mode)).toEqual([1, 2]);
+    expect(item.handlers.map((h) => h.message)).toEqual([false, true]);
     expect(item.handlers.every((h) => h.templated === undefined)).toBe(true);
     expect([...item.triggers].sort()).toEqual(['2502', '2515']);
     expect(notes.some((n) => n.includes('ww_tele') && n.includes('spawns'))).toBe(true);

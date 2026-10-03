@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { ENTWATCH_COLORS, HANDLER_MODES, type HandlerConfig, type HandlerType, type ItemConfig } from '../model/entwatch';
+import { ENTWATCH_COLORS, HANDLER_MODES, usesCooldown, usesMaxUses, usesMessage, type HandlerConfig, type HandlerType, type ItemConfig } from '../model/entwatch';
 import { friendlyName } from '../model/entity';
 import { outputChoices, suggestHandler } from '../model/suggest';
 import { suggestEvents } from '../model/events';
@@ -63,6 +63,10 @@ function HandlerEditor({ item, h, issues }: { item: ItemConfig; h: HandlerConfig
   const choices = ent ? outputChoices(ent, graph ?? undefined) : [];
   const topGuess = ent && graph ? suggestEvents(graph, ent)[0] : undefined;
   const isCounter = h.type === 'counterup' || h.type === 'counterdown';
+  // only what the mode reads is written (CS2Fixes ignores the rest)
+  const cdUsed = usesCooldown(h);
+  const maxUsed = usesMaxUses(h);
+  const msgUsed = usesMessage(h);
   const listId = `ev-${h.uid}`;
   const set = (patch: Partial<HandlerConfig>) => updateHandler(item.uid, h.uid, patch);
   return (
@@ -88,8 +92,9 @@ function HandlerEditor({ item, h, issues }: { item: ItemConfig; h: HandlerConfig
                 type: s.type,
                 event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
                 mode: s.mode,
-                cooldown: s.cooldown ?? h.cooldown,
-                ...(s.message === false ? { message: false } : {}),
+                cooldown: s.cooldown ?? 0,
+                maxuses: s.maxuses ?? 0,
+                message: s.message ?? true,
               });
             }}
           >
@@ -140,13 +145,19 @@ function HandlerEditor({ item, h, issues }: { item: ItemConfig; h: HandlerConfig
             ))}
           </select>
         </label>
-        <label>
+        <label className={cdUsed ? undefined : 'unused'}>
           {t('cfg.h.cooldown')}
-          <input className="input" type="number" min={0} step="0.5" value={h.cooldown ?? 0} onChange={(e) => set({ cooldown: parseFloat(e.target.value) || 0 })} data-testid="handler-cooldown" />
+          <input className="input" type="number" min={0} step="0.5" value={h.cooldown ?? 0} disabled={!cdUsed} onChange={(e) => set({ cooldown: parseFloat(e.target.value) || 0 })} data-testid="handler-cooldown" />
+          {!cdUsed && <span className="muted small">{t('cfg.h.unusedCooldown', { mode: h.mode, written: t(h.mode === 5 ? 'cfg.h.notWritten' : 'cfg.h.writtenZero') })}</span>}
         </label>
-        <label>
+        <label className={maxUsed ? undefined : 'unused'}>
           {t('cfg.h.maxuses')}
-          <input className="input" type="number" min={0} step={1} value={h.maxuses ?? 0} onChange={(e) => set({ maxuses: parseInt(e.target.value, 10) || 0 })} />
+          <input className="input" type="number" min={0} step={1} value={h.maxuses ?? 0} disabled={!maxUsed} onChange={(e) => set({ maxuses: parseInt(e.target.value, 10) || 0 })} data-testid="handler-maxuses" />
+          {!maxUsed && (
+            <span className="muted small">
+              {isCounter ? t('cfg.h.counterMaxUses') : t('cfg.h.unusedMaxUses', { written: t(h.mode === 5 ? 'cfg.h.notWritten' : 'cfg.h.writtenZero') })}
+            </span>
+          )}
         </label>
         {isCounter && (
           <label>
@@ -157,8 +168,8 @@ function HandlerEditor({ item, h, issues }: { item: ItemConfig; h: HandlerConfig
             </span>
           </label>
         )}
-        <label className="check">
-          <input type="checkbox" checked={h.message} onChange={(e) => set({ message: e.target.checked })} /> {t('cfg.h.message')}
+        <label className={msgUsed ? 'check' : 'check unused'} title={msgUsed ? undefined : t('cfg.h.unusedMessage')}>
+          <input type="checkbox" checked={h.message && msgUsed} disabled={!msgUsed} onChange={(e) => set({ message: e.target.checked })} /> {t('cfg.h.message')}
         </label>
         <label className="check">
           <input type="checkbox" checked={h.ui} onChange={(e) => set({ ui: e.target.checked })} /> {t('cfg.h.ui')}
