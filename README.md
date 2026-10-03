@@ -44,8 +44,8 @@ English summary is at the bottom.
    - GitHub Pages を有効にした URL を開く（下記「GitHub Pages で公開する」）。
    - ローカルで `npm install --legacy-peer-deps && npm run dev` して開く。
 2. `.vmap` または `.vpk` をドロップします（初めてなら「サンプルマップを読み込む」で UI を試せます）。
-3. 左の `weapon_` を選び、中央のツリーで配線を確認しながら「アイテムとして追加」。
-4. 右側でハンドラの `event` / `mode` / `cooldown` などを調整します。間違えて追加したアイテムは、一覧の行末 ✕ か編集欄上部の「このアイテムを削除」で消せます（ハンドラは枠右上の ✕、トリガーはチップの ✕、全部やり直すなら「すべて削除」）。
+3. 左上の `weapon_` を選び、中央のツリーで配線を確認しながら「アイテムとして追加」。追加したアイテムは左下の「EntWatch アイテム」一覧に並びます。
+4. 一覧でアイテムを選び、右側でハンドラの `event` / `mode` / `cooldown` などを調整します。不要なアイテムは一覧の ✕ で削除できます。
 5. 右下の「ダウンロード」で `<マップ名>.jsonc` を保存し、サーバーの
    `game/csgo/addons/cs2fixes/configs/entwatch/maps/` に置きます。
 
