@@ -144,6 +144,10 @@ filter / relay）が 1 ずつ `Add` / `Subtract` し、タイマーや自分自�
 「ボタンから撃たれている」に数えません。`OnBreak` しか撃たない physbox（当たり判定）、出力の無い filter（ナイフ除去用の部品）、
 他のロジックを Enable / Disable するだけの relay（キーコンボの段）、他の relay に `Trigger` するだけの relay（先の relay を代わりに判定）、
 strip を撃つ relay、ボタンから撃たれていない logic_timer は候補から外し、理由をメモに出します。
+テンプレート生成の武器では、**テンプレートの外（default_ents など）にある relay / counter / filter もハンドラにしません**
+（アイテムの使用でついでに撃たれるボス用 relay やステージの counter）。CS2Fixes はテンプレート生成の武器のハンドラをテンプレート番号で
+突き合わせるので、外のエンティティには `"templated": false` が必要になりますが、GFL 設定 2656 ハンドラ中 2 件しかありません。
+テンプレート内の relay が外のロジックに渡すだけのときは、その relay 自身がハンドラになります。
 
 **テンプレート（point_template）**: `NNN#entityLumpName` という lump は point_template #NNN の子で、中の `origin` は
 テンプレート基準のローカル座標です。距離を測るときは、そのテンプレートを `entitytemplate` に持つ env_entity_maker
@@ -357,6 +361,8 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers (named
   `Attack` / `Attack2` … when there are several keys). Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
   count as "fed by a button", OnBreak-only physboxes, output-less filters, combo-step relays and strip relays are skipped.
+  For a templated weapon, logic outside its template lump (a boss relay the item also fires, a stage counter) is never a
+  handler: CS2Fixes would need `"templated": false` on it, which the GFL configs write for 2 handlers in 2656.
   Entities in `NNN#entityLumpName` lumps get world positions (env_entity_maker or point_template origin + local origin) and
   the `[PR#]` / `&0000` name decorations are ignored when resolving names. Knife items get `triggers` from the trigger that
   ForceSpawns their template (unless it spawns other items too or moves the stage on: opens doors, switches teleports,
