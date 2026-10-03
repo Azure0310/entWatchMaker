@@ -6,6 +6,7 @@ import { inferCooldown } from '../model/cooldown';
 import { EntityChip } from './EntityChip';
 import { store, useAppState } from './store';
 import { addTrigger, updateItem } from './actions';
+import { IncomingActions } from './StripperInspector';
 import { useT } from './useT';
 
 const MAX_ROWS = 400;
@@ -61,7 +62,7 @@ function matches(row: Row, q: string): boolean {
 
 export function IoSearch() {
   const t = useT();
-  const { graph, selectedItemUid, config } = useAppState();
+  const { graph, selectedItemUid, config, mode } = useAppState();
   const [query, setQuery] = useState('');
   const [inputFilter, setInputFilter] = useState('');
   const [outputFilter, setOutputFilter] = useState('');
@@ -167,7 +168,8 @@ export function IoSearch() {
                 <td className="mono">{r.connection.param}</td>
                 <td>{r.connection.delay}</td>
                 <td>
-                  {item && r.from.hammerId && (
+                  {mode === 'stripper' && <IncomingActions from={r.from} c={r.connection} />}
+                  {mode !== 'stripper' && item && r.from.hammerId && (
                     <button type="button" className="mini" title={t('io.addHandler', { event: r.connection.output })} onClick={() => addAsHandler(r)} data-testid="io-add-handler">
                       +
                     </button>

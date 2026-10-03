@@ -5,6 +5,10 @@ import type { EntWatchConfig } from '../model/entwatch';
 import { detectLang, type Lang } from './i18n';
 import type { FoundMap } from './folderScan';
 import type { HintMap, RemapChange, RemapUnresolved } from '../model/remap';
+import type { StripperConfig } from '../model/stripper';
+import type { StripperSimulation } from '../model/stripperMatch';
+
+export type AppMode = 'entwatch' | 'stripper';
 
 export interface LoadingState {
   active: boolean;
@@ -34,6 +38,24 @@ export interface AppState {
   /** What each hammerid in the config pointed at (classname/targetname), for re-matching. */
   hints: HintMap;
   remapReport: { changes: RemapChange[]; unresolved: RemapUnresolved[] } | null;
+  /** Which config the right-hand side edits: EntWatch (CS2Fixes) or StripperCS2. */
+  mode: AppMode;
+  stripper: StripperConfig;
+  /** What the stripper config does to the loaded map; null until a map is loaded. */
+  stripperSim: StripperSimulation | null;
+  selectedActionUid: string | null;
+  /** Config file shown in the stripper output panel. */
+  stripperFile: string | null;
+}
+
+export const MODE_KEY = 'entwatchmaker.mode';
+
+function detectMode(): AppMode {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'stripper' ? 'stripper' : 'entwatch';
+  } catch {
+    return 'entwatch';
+  }
 }
 
 const initialState: AppState = {
@@ -55,6 +77,11 @@ const initialState: AppState = {
   foundMaps: null,
   hints: new Map(),
   remapReport: null,
+  mode: detectMode(),
+  stripper: { actions: [] },
+  stripperSim: null,
+  selectedActionUid: null,
+  stripperFile: null,
 };
 
 type Listener = () => void;

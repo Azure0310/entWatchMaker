@@ -8,6 +8,7 @@ import { parseMapFiles } from '../worker/client';
 import { buildDemoMap } from '../model/demo';
 import { hintsFromGraph, hintsFromJsonc, remapConfig, replaceHammerId, staleHammerIds, type HintMap } from '../model/remap';
 import type { Lang } from './i18n';
+import { persistStripper, refreshStripperSim, restoreStripper } from './stripperState';
 
 const CONFIG_KEY = (mapName: string) => `entwatchmaker.config.${mapName}`;
 const HINTS_KEY = (mapName: string) => `entwatchmaker.hints.${mapName}`;
@@ -79,7 +80,11 @@ function applyMap(map: ParsedMap): void {
   const hints: HintMap = new Map(carried);
   if (restored) for (const [k, v] of restored.hints) hints.set(k, v);
   const firstWeapon = map.entities.find((e) => e.classname.startsWith('weapon_')) ?? map.entities[0] ?? null;
+  // the stripper config follows the same rule: restore what is saved for this map name, else keep the current one
+  const stripper = restoreStripper(map.mapName) ?? prev.stripper;
   store.set({
+    stripper,
+    selectedActionUid: null,
     map,
     graph,
     loading: { active: false, message: '' },
@@ -91,9 +96,11 @@ function applyMap(map: ParsedMap): void {
     selectedEntityId: firstWeapon?.id ?? null,
     treeRootId: firstWeapon?.id ?? null,
     suggestionNotes: [],
-    weaponsOnly: map.stats.weapons > 0,
+    weaponsOnly: map.stats.weapons > 0 && prev.mode === 'entwatch',
     query: '',
   });
+  refreshStripperSim();
+  persistStripper();
   const lang = store.get().lang;
   if (restored) showToast(lang === 'ja' ? '前回の設定を復元しました' : 'Restored your previous config for this map');
   const stale = staleHammerIds(config, graph, hints);
@@ -122,7 +129,20 @@ export function loadDemo(): void {
 }
 
 export function clearMap(): void {
-  store.set({ map: null, graph: null, selectedEntityId: null, treeRootId: null, config: { items: [] }, selectedItemUid: null, error: null, suggestionNotes: [] });
+  store.set({
+    map: null,
+    graph: null,
+    selectedEntityId: null,
+    treeRootId: null,
+    config: { items: [] },
+    selectedItemUid: null,
+    error: null,
+    suggestionNotes: [],
+    stripper: { actions: [] },
+    stripperSim: null,
+    selectedActionUid: null,
+    stripperFile: null,
+  });
 }
 
 export function selectEntity(id: number | null, alsoRoot = false): void {
