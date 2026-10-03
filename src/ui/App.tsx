@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { validateConfig } from '../model/validate';
 import { clearMap, exportEntityDump, setLang } from './actions';
-import { ConfigPanel } from './ConfigPanel';
+import { ConfigPanel, ItemListPanel } from './ConfigPanel';
 import { DropZone } from './DropZone';
 import { EntityList } from './EntityList';
 import { Inspector } from './Inspector';
@@ -82,6 +82,7 @@ export function App() {
         <main className="workspace">
           <section className="col left">
             <EntityList />
+            <ItemListPanel issues={issues} />
           </section>
           <section className="col center">
             <RelationTree />
