@@ -40,6 +40,11 @@ export interface HandlerConfig {
   message: boolean;
   ui: boolean;
   templated?: boolean;
+  /**
+   * The type as written when CS2Fixes does not know it (GFL's "counter" with mode 6, read as
+   * other / mode 1 like CS2Fixes does). Never serialized.
+   */
+  typeRaw?: string;
 }
 
 export interface ItemConfig {
@@ -311,6 +316,7 @@ export function parseEntWatchConfig(text: string): { config: EntWatchConfig; war
         message: asBool(h.message, false),
         ui: asBool(h.ui, false),
         templated: typeof h.templated === 'boolean' ? h.templated : undefined,
+        ...(typeRaw !== type && typeRaw !== 'other' ? { typeRaw } : {}),
       });
     }
     const triggers = Array.isArray(r.triggers) ? r.triggers.map((t) => asString(t)).filter((t) => t.length > 0) : [];

@@ -75,3 +75,11 @@ describe('entwatch jsonc', () => {
     expect(parsed[0].shortname).toBe('X');
   });
 });
+
+describe("GFL's \"counter\" type", () => {
+  it('reads it as other / mode 1 like CS2Fixes, keeps the written type, and does not write it back', () => {
+    const { config } = parseEntWatchConfig('[{ "name": "Ward", "hammerid": "1", "handlers": [{ "type": "counter", "hammerid": "2", "mode": 6, "ui": true }] }]');
+    expect(config.items[0].handlers[0]).toMatchObject({ type: 'other', mode: 1, typeRaw: 'counter', ui: true });
+    expect(serializeEntWatchConfig(config)).not.toContain('typeRaw');
+  });
+});

@@ -371,6 +371,29 @@ function feedbackOnly(graph: EntityGraph, e: MapEntity): boolean {
   return effects.length > 0 && effects.every((c) => FEEDBACK_INPUTS.has(c.input.toLowerCase()) || graph.connectionTargets(e, c).every((t) => FEEDBACK_CLASSES.has(t.classname)));
 }
 
+/** `a` sets `b` going within `hops` steps of non-housekeeping inputs (UnpauseTimer, Trigger, Subtract, ...). */
+function firesWithin(graph: EntityGraph, a: MapEntity, b: MapEntity, hops: number): boolean {
+  let frontier = [a];
+  const seen = new Set([a.id]);
+  for (let d = 0; d < hops && frontier.length > 0; d++) {
+    const next: MapEntity[] = [];
+    for (const x of frontier) {
+      for (const c of x.connections) {
+        if (isHousekeepingInput(c.input)) continue;
+        for (const t of graph.connectionTargets(x, c)) {
+          if (t.id === b.id) return true;
+          if (!seen.has(t.id)) {
+            seen.add(t.id);
+            next.push(t);
+          }
+        }
+      }
+    }
+    frontier = next;
+  }
+  return false;
+}
+
 /**
  * Builds an item entry for a weapon entity and proposes handlers from related entities.
  *
@@ -674,6 +697,45 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     if (behind.length === 0) chosen.push({ c, extra: 'no relay behind its key outputs, so the ui reports the press itself' });
     else notes.push(`game_ui ${label(ui)}: ${behind.map(({ c: o }) => `${o.key?.key ?? 'output'} → ${label(o.entity)}`).join(', ')}`);
   }
+  // The item's charges / fuel / recast: a counter that locks or disables the button when it runs out
+  // and is not a plain use count (a timer refills or drains it). It shows the item on the HUD
+  // (mode 5) in place of the relays / branches the press sets off, and as CS2Fixes prints nothing
+  // for such a counter, the button reports the press (GFL: "button + counter" for 34 of the 40 items
+  // with such a counter).
+  const announcing = new Set<number>();
+  /** Gates the counter replaces: no handlers, but still part of the item's logic (its ability teleports). */
+  const replacedByGauge: MapEntity[] = [];
+  for (const { c: bc } of [...chosen]) {
+    const button = bc.entity;
+    if (!isUseEntity(button) || isGameUi(button)) continue;
+    const gauges = graph
+      .incomingConnections(button)
+      .filter(({ from, connection }) => isCounter(from) && /^(lock|disable)$/i.test(connection.input))
+      .map(({ from }) => from)
+      .filter((k, i, all) => all.indexOf(k) === i && !!k.hammerId && !counterUse(graph, k));
+    for (const counter of gauges) {
+      if (!chosen.some(({ c }) => c.entity.id === counter.id)) {
+        consider(counter, `locks ${label(button)} when it runs out`, 3);
+        const nc = byId.get(counter.id);
+        if (!nc) continue;
+        chosen.push({ c: nc, extra: 'the charges / fuel / recast the item shows on the HUD' });
+        included.add(counter.id);
+        for (let i = skipped.length - 1; i >= 0; i--) if (skipped[i].startsWith(`${label(counter)} (`)) skipped.splice(i, 1);
+      }
+      for (let i = chosen.length - 1; i >= 0; i--) {
+        const x = chosen[i].c.entity;
+        if (x.id === counter.id || isUseEntity(x) || isCounter(x)) continue;
+        if (firesWithin(graph, button, x, 4)) {
+          skipped.push(`${label(x)} (${x.classname}, set off by ${label(button)}, which reports the press while ${label(counter)} shows the item on the HUD)`);
+          chosen.splice(i, 1);
+          included.delete(x.id);
+          replacedByGauge.push(x);
+        }
+      }
+      announcing.add(button.id);
+      notes.push(`${label(button)} reports the press: ${label(counter)} shows the item on the HUD, and CS2Fixes prints no use for a counter shown as a value`);
+    }
+  }
   const keysPerUi = new Map<number, Set<string>>();
   for (const { c } of chosen) {
     if (!c.key) continue;
@@ -725,7 +787,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   }
   if (isKnife(e)) {
     if (selection.length === 0) notes.push('knife item: no strip zone tied to it, teleport landing (within 64 units) or template spawner for it was found');
-    const ability = abilityReach(graph, chosen.map(({ c }) => c.entity), e);
+    const ability = abilityReach(graph, [...chosen.map(({ c }) => c.entity), ...replacedByGauge], e);
     for (const st of selection) {
       if (!st.trigger.hammerId || triggers.includes(st.trigger.hammerId)) continue;
       if (st.kind === 'landing' && switchedOnBy(graph, st.trigger, ability)) {
@@ -743,19 +805,27 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   // +use (the GFL convention: {"type": "button", "hammerid": "..."}); messages come from the follow-up.
   // A counter shown as a value announces nothing, so then the button keeps reporting the press.
   const hasFollowUp = item.handlers.some((h) => h.type !== 'button' && h.message !== false);
-  if (item.handlers.some((h) => h.type === 'button') && !hasFollowUp && item.handlers.some((h) => h.type !== 'button')) {
+  const announcingIds = new Set([...announcing].map((id) => graph.byId.get(id)?.hammerId));
+  if (announcingIds.size === 0 && item.handlers.some((h) => h.type === 'button') && !hasFollowUp && item.handlers.some((h) => h.type !== 'button')) {
     notes.push('the handlers behind the button announce nothing (a counter shown as a value), so the button reports the press');
   }
-  if (hasFollowUp) {
-    for (const h of item.handlers) {
-      if (h.type !== 'button') continue;
-      h.mode = 1;
-      h.event = undefined;
-      h.message = false;
+  for (const h of item.handlers) {
+    if (h.type !== 'button') continue;
+    if (announcingIds.has(h.hammerid)) {
+      // the counter shows the item on the HUD; the button only reports the press
+      if (!((h.cooldown ?? 0) > 0)) h.mode = 1;
+      h.message = true;
       h.ui = false;
-      h.cooldown = 0;
       h.maxuses = 0;
+      continue;
     }
+    if (!hasFollowUp) continue;
+    h.mode = 1;
+    h.event = undefined;
+    h.message = false;
+    h.ui = false;
+    h.cooldown = 0;
+    h.maxuses = 0;
   }
   if (item.handlers.length === 0) {
     notes.push(candidates.length === 0

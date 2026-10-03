@@ -153,7 +153,10 @@ function fires(graph: EntityGraph, a: MapEntity, b: MapEntity, hops = 2): boolea
   return false;
 }
 
-const isCounterType = (h: HandlerConfig) => h.type === 'counterup' || h.type === 'counterdown';
+/** A +use hook only: no event, no message, no HUD (the handlers behind it report the use). */
+const isPlainHook = (h: HandlerConfig) => h.type === 'button' && h.mode <= 1 && !h.event && !h.message && !h.ui;
+/** A counter shown on the HUD; GFL's "counter" (mode 6, unknown to CS2Fixes) is meant as one too. */
+const isCounterType = (h: HandlerConfig) => h.type === 'counterup' || h.type === 'counterdown' || h.typeRaw === 'counter';
 /** CS2Fixes prints a use in chat when `message` is on, except for a counter in mode 5 (it only shows the value). */
 const announces = (h: HandlerConfig) => h.message && !(isCounterType(h) && h.mode === 5);
 /**
@@ -172,7 +175,7 @@ const shownCooldown = (h: HandlerConfig) => {
  *   - every button GFL hooks is hooked (CS2Fixes blocks the +use of other players on them)
  *   - every GFL handler has a counterpart that fires on the same use; no other handlers (extra
  *     chat messages / HUD entries, or a map button only the holder could press)
- *   - uses GFL announces / shows on the HUD are announced / shown
+ *   - uses GFL announces are announced, and the item is on the HUD when GFL puts it there
  *   - the cooldown within 1 s (CS2Fixes' own leeway for use messages) and the same max uses, as far
  *     as the mode uses them (a counter's uses come from its min / max)
  *   - the same triggers (ebanned players cannot touch them). CS2Fixes hooks every hammerid in any
@@ -217,7 +220,7 @@ function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig, m
     const xe = get(x.hammerid);
     return pairs.some(([, t]) => {
       const te = get(t.hammerid);
-      return t.type === 'button' && t.mode <= 1 && !!te && !!xe && fires(graph, te, xe);
+      return isPlainHook(t) && !!te && !!xe && fires(graph, te, xe);
     });
   });
   for (const x of tool.handlers) if (!used.has(x.hammerid) && !followUps.includes(x)) problems.push(`extra handler: ${x.hammerid}`);
@@ -226,12 +229,11 @@ function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig, m
   }
   for (const [h, t] of pairs) {
     // a plain +use hook leaves the message / HUD / numbers to the handlers its press fires
-    const plain = t.type === 'button' && t.mode <= 1;
+    const plain = isPlainHook(t);
     const te = get(t.hammerid);
     const firedByT = plain && te ? tool.handlers.filter((x) => x !== t && get(x.hammerid) && fires(graph, te, get(x.hammerid)!)) : [];
     const carrier = plain && (h.mode > 1 || h.message || h.ui) ? (firedByT.find((x) => followUps.includes(x)) ?? firedByT[0] ?? t) : t;
     if (announces(h) && !announces(t) && !firedByT.some(announces)) problems.push(`use not announced: ${h.hammerid}`);
-    if (h.ui && !t.ui && !firedByT.some((x) => x.ui)) problems.push(`not shown on the HUD: ${h.hammerid}`);
     const counters = isCounterType(h) && isCounterType(carrier);
     if (!counters && h.hammerid === carrier.hammerid && h.event && carrier.event && h.event.toLowerCase() !== carrier.event.toLowerCase()) problems.push(`event: ${h.hammerid}`);
     const gc = shownCooldown(h);
@@ -241,6 +243,8 @@ function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig, m
     const tu = shownUses(carrier);
     if (gu !== tu) problems.push(`${gu === 0 ? 'max uses not in GFL' : tu === 0 ? 'max uses missing' : 'max uses differ'}: ${h.hammerid}`);
   }
+  // CS2Fixes puts one line per item on the HUD, built from every handler with ui on
+  if (cfg.handlers.some((h) => h.ui) && !tool.handlers.some((h) => h.ui)) problems.push(`not shown on the HUD: ${cfg.hammerid}`);
   const missed = cfg.triggers.filter((id) => !mapTriggers.tool.has(id));
   const extra = tool.triggers.filter((id) => !mapTriggers.gfl.has(id));
   if (missed.length > 0) problems.push(`trigger missed: ${missed.join(' ')}`);
