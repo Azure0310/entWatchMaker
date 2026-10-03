@@ -2,9 +2,9 @@ import type { EntityGraph } from './graph';
 import { friendlyName, isWeaponEntity, type MapEntity } from './entity';
 import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entwatch';
 import { newHandler, newItem } from './entwatch';
-import { hasSelfCooldown, inferCooldown } from './cooldown';
+import { counterUse, hasSelfCooldown, inferCooldown } from './cooldown';
 import { suggestEvents } from './events';
-import { findSelectionTriggers, isKnife, stripsVia } from './triggers';
+import { abilityReach, findSelectionTriggers, isKnife, stripsVia, switchedOnBy } from './triggers';
 import { HOOKABLE_TRIGGERS, abilityOutputs, hasUseOutput, isArmInput, isCounter, isFilter, isGameUi, isGate, isHousekeepingInput, isUseEntity, isUseLike, keyLabel } from './roles';
 import { minDistance, origin } from './position';
 
@@ -80,6 +80,29 @@ export interface HandlerSuggestion {
   cooldown?: number;
   cooldownReason?: string;
   eventReason?: string;
+  maxuses?: number;
+  maxusesReason?: string;
+  /** false when CS2Fixes would not print the use anyway (a counter shown as a value, mode 5). */
+  message?: boolean;
+  /** Why a counter counts uses (mode 3 / 4) or shows a value (mode 5). */
+  modeReason?: string;
+}
+
+/**
+ * Uses allowed by the entity's own outputs: when the output EntWatch watches (`event`) fires
+ * only N times ("Only once" in Hammer), the ability can be used N times. Housekeeping outputs
+ * (Kill / Lock / Disable, ...) and other outputs (a one-off OnUser1 for a boss) do not count.
+ * The GFL configs write such items as mode 3 with maxuses N.
+ */
+function fireLimit(e: MapEntity, event: string | undefined): { uses: number; reason: string } | null {
+  if (!event) return null;
+  let best: { uses: number; reason: string } | null = null;
+  for (const c of e.connections) {
+    if (c.output.toLowerCase() !== event.toLowerCase()) continue;
+    if (!(c.timesToFire > 0) || isHousekeepingInput(c.input)) continue;
+    if (!best || c.timesToFire < best.uses) best = { uses: c.timesToFire, reason: `${c.output} → ${c.target} ${c.input} fires ${c.timesToFire === 1 ? 'only once' : `${c.timesToFire} times`}` };
+  }
+  return best;
 }
 
 /**
@@ -94,11 +117,41 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
       s.event = top.event;
       s.eventReason = top.reason;
     }
-    const cd = inferCooldown(graph, e);
+    const cd = inferCooldown(graph, e, s.event);
     if (cd) {
       s.cooldown = cd.seconds;
       s.cooldownReason = cd.reason;
       if (s.mode === 1) s.mode = 2;
+    }
+    const limit = fireLimit(e, s.event);
+    if (limit) {
+      s.maxuses = limit.uses;
+      s.maxusesReason = limit.reason;
+      s.mode = 3;
+    }
+  } else if (graph) {
+    // a counter the use steps by one counts uses: CS2Fixes announces each in mode 3 / 4 (its max
+    // uses come from the counter's min / max); anything else is shown as a value (mode 5, silent)
+    const use = counterUse(graph, e);
+    if (use) {
+      s.type = use.type;
+      if (use.afterUses) {
+        s.mode = 4;
+        s.cooldown = use.afterUses.seconds;
+        s.cooldownReason = use.afterUses.reason;
+        s.modeReason = `counts uses (${use.reason}) and locks the item when they run out`;
+      } else {
+        s.mode = 3;
+        s.modeReason = `counts uses (${use.reason})`;
+        const cd = inferCooldown(graph, e, 'OutValue');
+        if (cd) {
+          s.cooldown = cd.seconds;
+          s.cooldownReason = cd.reason;
+        }
+      }
+    } else {
+      s.message = false;
+      s.modeReason = 'holds a charge or an amount (a timer, other steps than one per use): shown as a value, CS2Fixes prints no uses for it';
     }
   }
   return s;
@@ -256,6 +309,69 @@ function gateRole(graph: EntityGraph, x: MapEntity): { role: 'chain-step' | 'pas
 }
 
 /**
+ * The relays / cases / counters a filter hands the use on to, when that is all it does: every
+ * non-housekeeping output lands on logic. Null when the filter has effects of its own (then it is
+ * the ability and the gates behind it only repeat its event).
+ */
+function filterPassOn(graph: EntityGraph, f: MapEntity): MapEntity[] | null {
+  const passOn: MapEntity[] = [];
+  for (const c of f.connections) {
+    if (isHousekeepingInput(c.input)) continue;
+    for (const t of graph.connectionTargets(f, c)) {
+      if (t.id === f.id) continue;
+      if (!(isGate(t) || isCounter(t) || isFilter(t)) || isGameUi(t)) return null;
+      if (!passOn.includes(t)) passOn.push(t);
+    }
+  }
+  const gates = passOn.filter((t) => !isFilter(t));
+  return gates.length > 0 ? gates : null;
+}
+
+/**
+ * Counters the filter adds to / subtracts from that no other filter counts: the item's own use
+ * or ammo count. A counter shared by several items' filters (a combo meter) is not.
+ */
+function itemCounters(graph: EntityGraph, f: MapEntity): MapEntity[] {
+  const out: MapEntity[] = [];
+  for (const c of f.connections) {
+    if (!/^(add|subtract)$/i.test(c.input)) continue;
+    for (const t of graph.connectionTargets(f, c)) {
+      if (!isCounter(t) || out.includes(t)) continue;
+      const shared = graph.incomingConnections(t).some(({ from, connection }) => from.id !== f.id && isFilter(from) && !isHousekeepingInput(connection.input));
+      if (!shared) out.push(t);
+    }
+  }
+  return out;
+}
+
+/** True when something locks `e` and something unlocks it again (a gated button). */
+function isLockedAndUnlocked(graph: EntityGraph, e: MapEntity): boolean {
+  const inputs = new Set(graph.incomingConnections(e).map(({ connection }) => connection.input.toLowerCase()));
+  return inputs.has('lock') && inputs.has('unlock');
+}
+
+/** Gates that pick one outcome of the use (enough sun or not, the case for this level). */
+const CHOICE_CLASSES = new Set(['logic_compare', 'logic_branch', 'logic_case']);
+
+/** `e` locks / disables a button or other +use entity, or has cooldown wiring of its own. */
+function startsCooldown(graph: EntityGraph, e: MapEntity): boolean {
+  if (hasSelfCooldown(graph, e)) return true;
+  return e.connections.some((c) => /^(lock|disable)$/i.test(c.input) && graph.connectionTargets(e, c).some(isUseEntity));
+}
+
+const FEEDBACK_CLASSES = new Set([
+  'prop_dynamic', 'prop_dynamic_override', 'info_particle_system', 'env_sprite', 'env_sprite_clientside', 'point_worldtext', 'game_text',
+  'ambient_generic', 'point_soundevent', 'snd_event_point', 'env_fade', 'env_shake', 'env_screenoverlay', 'env_hudhint', 'env_instructor_hint',
+]);
+const FEEDBACK_INPUTS = new Set(['color', 'alpha', 'startsound', 'stopsound', 'playsound', 'setsourceentity', 'startglowing', 'stopglowing', 'setglowcolor', 'setmessage', 'setintmessage', 'display', 'showhudhint']);
+
+/** `e` only answers the player: flashes a model, plays a sound, shows a text. */
+function feedbackOnly(graph: EntityGraph, e: MapEntity): boolean {
+  const effects = e.connections.filter((c) => !isHousekeepingInput(c.input));
+  return effects.length > 0 && effects.every((c) => FEEDBACK_INPUTS.has(c.input.toLowerCase()) || graph.connectionTargets(e, c).every((t) => FEEDBACK_CLASSES.has(t.classname)));
+}
+
+/**
  * Builds an item entry for a weapon entity and proposes handlers from related entities.
  *
  * Candidates come from, in order of confidence:
@@ -400,7 +516,9 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   for (const c of byOrder) {
     const x = c.entity;
     if (!isUseEntity(x) || !x.hammerId) continue;
-    if (!hasUseOutput(x)) {
+    // a button that fires nothing itself but is locked and unlocked by the item's logic is still
+    // the +use the item is gated on (ze_santassination_p: the game_ui locks it for the cooldown)
+    if (!hasUseOutput(x) && !(!isGameUi(x) && isLockedAndUnlocked(graph, x))) {
       const outs = [...new Set(x.connections.map((k) => k.output))];
       skipped.push(`${label(x)} (${x.classname}, using it fires nothing${outs.length > 0 ? `; only ${outs.join('/')} housekeeping` : '; no outputs'})`);
       continue;
@@ -412,6 +530,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   // touch triggers that start the chain count as feeders (they are confirmed as activation triggers below)
   const touchFeeders = byOrder.filter((c) => HOOKABLE_TRIGGERS.has(c.entity.classname) && c.entity.connections.some((k) => /^on(start)?touch|^ontrigger/i.test(k.output)));
   for (const c of touchFeeders) included.add(c.entity.id);
+  const behindFilters: Candidate[] = [];
   for (const c of byOrder) {
     const x = c.entity;
     if (!isFilter(x) || !x.hammerId || included.has(x.id)) continue;
@@ -420,13 +539,43 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       continue;
     }
     if (c.tier === 1 || fedByIncluded(x)) {
+      // a filter that only checks the user and hands the use on to relays / counters is not the
+      // ability: the gates behind it are (GFL lists those, e.g. button → filter → relay)
+      const passOn = filterPassOn(graph, x);
+      if (passOn) {
+        skipped.push(`${label(x)} (filter only checks the user and hands the use on to ${passOn.map(label).join(', ')})`);
+        for (const t of passOn) {
+          consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: true });
+          const nc = byId.get(t.id);
+          if (nc) {
+            nc.fedVia = true;
+            if (!behindFilters.includes(nc)) behindFilters.push(nc);
+          }
+        }
+        continue;
+      }
+      // a counter only this filter counts (uses / ammo of this item) reports the use better than
+      // the filter: the GFL configs list the counter (21 of 27 such chains)
+      const counters = itemCounters(graph, x);
+      if (counters.length > 0) {
+        skipped.push(`${label(x)} (filter counted by ${counters.map(label).join(', ')}, which reports the use)`);
+        for (const t of counters) {
+          consider(t, `counts ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: true });
+          const nc = byId.get(t.id);
+          if (nc) {
+            nc.fedVia = true;
+            if (!behindFilters.includes(nc)) behindFilters.push(nc);
+          }
+        }
+        continue;
+      }
       included.add(x.id);
       chosen.push({ c });
     } else skipped.push(`${label(x)} (filter, not fed by a button)`);
   }
   const isGateCandidate = (o: Candidate) => (isGate(o.entity) || isCounter(o.entity)) && !isGameUi(o.entity);
   const gateCount = candidates.filter(isGateCandidate).length;
-  const gateQueue = byOrder.filter(isGateCandidate);
+  const gateQueue = [...byOrder, ...behindFilters.filter((b) => !byOrder.includes(b))].filter(isGateCandidate);
   const decided = new Set<number>();
   while (gateQueue.length > 0) {
     const c = gateQueue.shift()!;
@@ -444,15 +593,39 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     }
     const fed = feeds(x, isUseLike) || c.fedVia === true;
     const selfCd = hasSelfCooldown(graph, x);
+    // a counter holding an amount the use only checks (GetValue → compare: enough sun to plant?) is
+    // not the ability, and CS2Fixes would not announce it: the use goes on through what it fires
+    if (isCounter(x) && !counterUse(graph, x)) {
+      const readOn = x.connections
+        .filter((k) => /^ongetvalue$/i.test(k.output) && !isHousekeepingInput(k.input))
+        .flatMap((k) => graph.connectionTargets(x, k))
+        .filter((t, i, all) => (isGate(t) || isFilter(t)) && all.indexOf(t) === i);
+      if (readOn.length > 0) {
+        skipped.push(`${label(x)} (math_counter holding an amount the use only checks; the use goes on through ${readOn.map(label).join(', ')})`);
+        for (const t of readOn) {
+          if (byId.has(t.id)) continue;
+          consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: fed || undefined });
+          const nc = byId.get(t.id);
+          if (nc) gateQueue.push(nc);
+        }
+        continue;
+      }
+    }
     const { role, passOn } = gateRole(graph, x);
-    if (role === 'chain-step') {
+    // a counter that only locks or kills things when it runs out is the item's use count
+    if (role === 'chain-step' && !(isCounter(x) && c.fedVia)) {
       skipped.push(`${label(x)} (${x.classname}, only arms or disarms other logic: a step of a key combo, not an ability)`);
       continue;
     }
     if (role === 'pass-through' && !selfCd) {
-      // the gate it hands the use to is the one that does something: judge that one instead
-      skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${passOn.map(label).join(', ')})`);
-      for (const t of passOn) {
+      // the gate it hands the use to is the one that does something: judge that one instead. Of
+      // the outcomes of a compare / branch, the one that locks the item or starts its cooldown is
+      // the ability; one that only flashes a model or plays a sound answers "not ready"
+      const ability = CHOICE_CLASSES.has(x.classname) ? passOn.filter((t) => startsCooldown(graph, t)) : [];
+      const replies = ability.length > 0 ? passOn.filter((t) => !ability.includes(t) && feedbackOnly(graph, t)) : [];
+      const next = passOn.filter((t) => !replies.includes(t));
+      skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${next.map(label).join(', ')}${replies.length > 0 ? `; ${replies.map(label).join(', ')} only answers "not ready"` : ''})`);
+      for (const t of next) {
         if (byId.has(t.id)) continue;
         consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: fed || undefined });
         const nc = byId.get(t.id);
@@ -514,17 +687,16 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   // knife / class items: triggers that spawn, strip or land on the knife (found by position, not by name)
   const selection = isKnife(e) ? findSelectionTriggers(graph, e) : [];
   const selectionIds = new Set(selection.map((s) => s.trigger.id));
+  // Triggers wired into the item itself (a zone the holder touches, a hurt zone parented to the
+  // weapon) are never listed: "triggers" keeps ebanned players from touching them, so they would
+  // become immune to its effect zones, and an ebanned player cannot hold the item anyway. The GFL
+  // configs list none of them (0 of 44 on the evaluated maps).
   for (const c of byOrder) {
     if (!c.entity.classname.startsWith('trigger_') || !c.entity.hammerId) continue;
     if (selectionIds.has(c.entity.id)) continue; // reported below
     const verdict = isActivationTrigger(graph, c.entity, chainIds);
-    if (verdict.ok) {
-      triggers.push(c.entity.hammerId);
-      notes.push(`trigger ${label(c.entity)}: ${c.why}; ${verdict.reason}`);
-    } else {
-      included.delete(c.entity.id);
-      skipped.push(`trigger ${label(c.entity)} (${verdict.reason})`);
-    }
+    if (!verdict.ok) included.delete(c.entity.id);
+    skipped.push(`trigger ${label(c.entity)} (${verdict.ok ? `${verdict.reason}; part of the item, not a trigger to keep ebanned players off` : verdict.reason})`);
   }
 
   for (const { c, extra } of chosen) {
@@ -537,7 +709,8 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
       mode: s.mode,
       cooldown: s.cooldown ?? 0,
-      maxuses: 0,
+      maxuses: s.maxuses ?? 0,
+      ...(s.message === false ? { message: false } : {}),
       // CS2Fixes auto-detects templated entities from the _N name suffix; the only value worth
       // writing is "false" for a shared (non-templated) handler of a templated weapon
       templated: e.source.templated && !ent.source.templated ? false : undefined,
@@ -545,13 +718,20 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     item.handlers.push(h);
     notes.push(`handler ${label(ent)} (${s.type}${s.event ? ' ' + s.event : ''}): ${c.why}${extra ? '; ' + extra : ''}`);
     if (h.templated === false) notes.push(`templated=false: the weapon is spawned by a template but ${label(ent)} is a single map entity`);
+    if (s.modeReason) notes.push(`mode ${s.mode}: ${s.modeReason}`);
     if (s.eventReason && s.event) notes.push(`event ${s.event}: ${s.eventReason}`);
     if (s.cooldownReason) notes.push(`cooldown ${s.cooldown}s: ${s.cooldownReason}`);
+    if (s.maxusesReason) notes.push(`maxuses ${s.maxuses}: ${s.maxusesReason}`);
   }
   if (isKnife(e)) {
-    if (selection.length === 0) notes.push('knife item: no strip zone, teleport landing or template spawner for it was found (radius 256 / 384 units)');
+    if (selection.length === 0) notes.push('knife item: no strip zone tied to it, teleport landing (within 64 units) or template spawner for it was found');
+    const ability = abilityReach(graph, chosen.map(({ c }) => c.entity), e);
     for (const st of selection) {
       if (!st.trigger.hammerId || triggers.includes(st.trigger.hammerId)) continue;
+      if (st.kind === 'landing' && switchedOnBy(graph, st.trigger, ability)) {
+        skipped.push(`trigger ${label(st.trigger)} (${st.reason}, but the item's own logic switches it on: the ability's teleport, not the way to get the item)`);
+        continue;
+      }
       triggers.push(st.trigger.hammerId);
       notes.push(`trigger ${label(st.trigger)}: ${st.reason}`);
     }
@@ -561,7 +741,11 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
 
   // When a filter / relay / counter handler follows the button, the button entry only needs to hook
   // +use (the GFL convention: {"type": "button", "hammerid": "..."}); messages come from the follow-up.
-  const hasFollowUp = item.handlers.some((h) => h.type !== 'button');
+  // A counter shown as a value announces nothing, so then the button keeps reporting the press.
+  const hasFollowUp = item.handlers.some((h) => h.type !== 'button' && h.message !== false);
+  if (item.handlers.some((h) => h.type === 'button') && !hasFollowUp && item.handlers.some((h) => h.type !== 'button')) {
+    notes.push('the handlers behind the button announce nothing (a counter shown as a value), so the button reports the press');
+  }
   if (hasFollowUp) {
     for (const h of item.handlers) {
       if (h.type !== 'button') continue;

@@ -46,6 +46,28 @@ describe('nested (workshop style) vpk', () => {
     expect(map.warnings.some((w) => w.includes('nested package maps/point_template_test.vpk'))).toBe(true);
   });
 
+  it('reads the main map, not the biggest stage map, when the package holds several (ze_castlevania)', async () => {
+    // stage maps in maps/stages/ are mostly geometry: the biggest nested vpks, some with more
+    // entity data than the main map (ze_m0w0m_p); the skybox has almost none
+    const stage = (name: string, lump: string, geometry: number) =>
+      writeVpk([
+        { path: `maps/${name}.vmap_c`, data: new Uint8Array(32) },
+        { path: `maps/${name}/entities/default_ents.vents_c`, data: fixture(lump) },
+        { path: `maps/${name}/world_physics.vphys_c`, data: new Uint8Array(geometry) },
+      ]);
+    const enc = new TextEncoder();
+    const multi = writeVpk([
+      { path: 'addoninfo.txt', data: enc.encode('"AddonInfo" { "name" "castlevania_like" }') },
+      { path: 'maps/stages/cv_stage3.vpk', data: stage('cv_stage3', 'graphics_settings_ents.vents_c', 2 * 1024 * 1024) },
+      { path: 'maps/point_template_test_skybox.vpk', data: stage('point_template_test_skybox', 'default_ents_kv3_v1.vents_c', 16) },
+      { path: 'maps/point_template_test.vpk', data: fixture('point_template_test.vpk') },
+    ]);
+    const map = await loadMapFromVpk(bufferByteSource(multi, '3767338754.vpk'), new Map());
+    expect(map.mapName).toBe('point_template_test');
+    expect(map.entities).toHaveLength(14);
+    expect(map.warnings.some((w) => w.includes('3 maps') && w.includes('maps/stages/cv_stage3.vpk') && !w.includes('not maps/point_template_test_skybox'))).toBe(true);
+  });
+
   it('explains what a package without a map contains', async () => {
     const enc = new TextEncoder();
     const bad = writeVpk([{ path: 'materials/x.vmat_c', data: enc.encode('x') }, { path: 'models/y.vmdl_c', data: enc.encode('y') }]);

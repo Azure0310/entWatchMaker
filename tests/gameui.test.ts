@@ -39,8 +39,9 @@ describe('game_ui implemented as a logic_case script', () => {
     expect(notes.some((n) => n.includes('dragon_phbox') && n.includes('housekeeping'))).toBe(true);
     expect(notes.some((n) => n.includes('dragon_knife_filter_a') && n.includes('no outputs'))).toBe(true);
     expect(notes.some((n) => n.startsWith('game_ui dragon_ui'))).toBe(true);
-    // strip zone through the point_entity_finder and the selection teleport; not the giant's teleport
-    expect([...item.triggers].sort()).toEqual(['2610', '2611']);
+    // the selection teleport; not the giant's teleport, and not the knife-removal trigger_once above
+    // the knife: nothing ties it to the knife (like skyrim, where GFL lists only the teleport)
+    expect([...item.triggers].sort()).toEqual(['2611']);
     expect(validateConfig({ items: [item] }, graph).filter((i) => i.level === 'error')).toEqual([]);
   });
 
@@ -55,7 +56,8 @@ describe('game_ui implemented as a logic_case script', () => {
     const { item, notes } = suggestItemForWeapon(byName('[PR#]ww_knife&0000'), graph);
     expect(item.handlers.map((h) => h.hammerid)).toEqual(['2511', '2512']);
     expect(item.handlers.map((h) => h.name)).toEqual(['Attack', 'Attack2']);
-    expect(item.handlers.map((h) => h.cooldown)).toEqual([2, 25]);
+    // the attack relay re-enables itself after 2s: a double-press guard, not a cooldown
+    expect(item.handlers.map((h) => h.cooldown)).toEqual([0, 25]);
     expect(item.handlers.every((h) => h.templated === undefined)).toBe(true);
     expect([...item.triggers].sort()).toEqual(['2502', '2515']);
     expect(notes.some((n) => n.includes('ww_tele') && n.includes('spawns'))).toBe(true);
