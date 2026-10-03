@@ -1,5 +1,5 @@
 import { parseEntityLump, type ParsedEntityLump } from '../formats/entityLump';
-import { VpkArchive, classifyVpkFileName, type ByteSource } from '../formats/vpk';
+import { VpkArchive, classifyVpkFileName, type ByteSource, type VpkEntry } from '../formats/vpk';
 import { extractVmapEntities, parseVmapFile, type VmapFile } from '../formats/vmap';
 import type { MapEntity, ParsedMap } from './entity';
 
@@ -21,34 +21,66 @@ function finish(map: Omit<ParsedMap, 'stats'>): ParsedMap {
 // Compiled maps (workshop .vpk)
 // ---------------------------------------------------------------------------------------------
 
+/** Bytes of entity lumps in a package: how much of the map's logic it holds. */
+function entityWeight(pak: VpkArchive): number {
+  return pak.entries.filter((e) => e.ext === 'vents_c').reduce((n, e) => n + e.length, 0);
+}
+
+interface MapPackage {
+  pak: VpkArchive;
+  chain: string[];
+  /** Other nested map packages that were passed over (skyboxes, stage maps). */
+  others: string[];
+}
+
+/**
+ * How likely a nested map package is the playable map, compared in order: a map right under
+ * `maps/` beats one in a sub folder (`maps/stages/…`), anything beats a 3D skybox, then the one
+ * with the most entity data wins.
+ */
+function mapRank(entry: VpkEntry, pak: VpkArchive): number[] {
+  const inMapsRoot = entry.dir.toLowerCase() === 'maps' ? 1 : 0;
+  const skybox = /(^|_)(3d)?sky(box)?(_|$)|skybox/i.test(entry.name) ? 0 : 1;
+  return [inMapsRoot, skybox, entityWeight(pak)];
+}
+
+function rankAbove(a: number[], b: number[]): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
+
 /**
  * Finds the package that actually holds the compiled map. CS2 workshop items are addon packages
  * with the compiled map nested inside as `maps/<name>.vpk`, so we descend into nested vpks
- * (without copying them) until entity lumps show up.
+ * (without copying them) until entity lumps show up. A package can hold several maps (a 3D
+ * skybox, or stage maps in `maps/stages/` next to the main map, as in ze_castlevania or
+ * ze_m0w0m_p): the biggest file is often a stage full of geometry, so they are ranked by mapRank.
  */
-async function findMapPackage(
-  pak: VpkArchive,
-  progress: ProgressFn | undefined,
-  depth: number,
-  chain: string[],
-): Promise<{ pak: VpkArchive; chain: string[] } | null> {
-  if (pak.entries.some((e) => e.ext === 'vents_c')) return { pak, chain };
+async function findMapPackage(pak: VpkArchive, progress: ProgressFn | undefined, depth: number, chain: string[]): Promise<MapPackage | null> {
+  if (pak.entries.some((e) => e.ext === 'vents_c')) return { pak, chain, others: [] };
   if (depth >= 2) return null;
   const nested = pak.entries
     .filter((e) => e.ext === 'vpk' && e.length > 0)
     // compiled maps first, biggest first
     .sort((a, b) => Number(b.dir.toLowerCase().startsWith('maps')) - Number(a.dir.toLowerCase().startsWith('maps')) || b.length - a.length);
+  let best: (MapPackage & { rank: number[] }) | null = null;
+  const others: string[] = [];
   for (const entry of nested) {
     progress?.(`Opening nested package ${entry.path}`);
     try {
       const inner = await pak.openNested(entry);
       const found = await findMapPackage(inner, progress, depth + 1, [...chain, entry.path]);
-      if (found) return found;
+      if (!found) continue;
+      const rank = mapRank(entry, found.pak);
+      if (!best || rankAbove(rank, best.rank)) {
+        if (best) others.push(best.chain[best.chain.length - 1]);
+        best = { ...found, rank };
+      } else others.push(entry.path);
     } catch (err) {
       progress?.(`Skipping ${entry.path}: ${(err as Error).message}`);
     }
   }
-  return null;
+  return best ? { pak: best.pak, chain: best.chain, others: [...best.others, ...others] } : null;
 }
 
 function describePackage(pak: VpkArchive): string {
@@ -72,6 +104,12 @@ export async function loadMapFromVpk(dir: ByteSource, archives: Map<number, Byte
   }
   const pak = found.pak;
   if (found.chain.length > 0) warnings.push(`Compiled map read from nested package ${found.chain.join(' → ')}`);
+  // a 3D skybox next to the map is the normal case; other maps (stages) are worth a word
+  const skipped = found.others.filter((p) => !/skybox|(^|[_/])(3d)?sky(_|\.vpk$)/i.test(p));
+  if (skipped.length > 0) {
+    const read = found.chain[found.chain.length - 1] ?? 'the outer package';
+    warnings.push(`The package holds ${found.others.length + 1} maps; read ${read} (a map right under maps/, with the most entity data), not ${skipped.join(', ')}`);
+  }
 
   const mapResources = pak.entries.filter((e) => e.ext === 'vmap_c' && e.dir.toLowerCase().startsWith('maps'));
   const lumpEntries = pak.entries.filter((e) => e.ext === 'vents_c');

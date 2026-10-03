@@ -57,10 +57,10 @@ describe('event inference', () => {
     const { item } = suggestItemForWeapon(byName('fire_weapon'), graph);
     const text = serializeEntWatchConfig({ items: [item] }, { comments: false });
     const parsed = JSON.parse(text);
-    const filter = parsed[0].handlers.find((h: { hammerid: string }) => h.hammerid === '1203');
-    expect(filter.type).toBeUndefined();
-    expect(filter.event).toBe('OnPass');
-    expect(parseEntWatchConfig(text).config.items[0].handlers.find((h) => h.hammerid === '1203')?.type).toBe('other');
+    const relay = parsed[0].handlers.find((h: { hammerid: string }) => h.hammerid === '1204');
+    expect(relay.type).toBeUndefined();
+    expect(relay.event).toBe('OnTrigger');
+    expect(parseEntWatchConfig(text).config.items[0].handlers.find((h) => h.hammerid === '1204')?.type).toBe('other');
   });
 });
 

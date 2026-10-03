@@ -28,17 +28,18 @@ describe('knife / class item triggers', () => {
     expect(spawnsEntity(graph, byName('ww_tele'), byName('dragon_knife'))).toBeNull();
   });
 
-  it('finds the strip zone on the knife and the teleports landing there, not the spawn strip', () => {
+  it('finds the strip zone tied to the knife and the teleports landing there, not the spawn strip', () => {
     const sel = findSelectionTriggers(graph, byName('nazgul_weapon'));
     const ids = sel.map((s) => s.trigger.hammerId);
-    expect(ids).toContain('2401'); // strip zone at the knife
+    expect(ids).toContain('2401'); // strip zone parented to the knife
     expect(ids).toContain('2403'); // trigger_teleport whose destination is on the knife
     expect(ids).toContain('2405'); // trigger_multiple firing a point_teleport onto the strip zone
     expect(ids).not.toContain('2410'); // spawn strip far away
     // templated knife: positions come from the maker, the ForceSpawn teleport is listed first
     expect(findSelectionTriggers(graph, byName('[PR#]ww_knife&0000')).map((s) => s.trigger.hammerId)).toEqual(['2502', '2515']);
-    // landings go to the nearest knife only
-    expect(findSelectionTriggers(graph, byName('dragon_knife')).map((s) => s.trigger.hammerId)).toEqual(['2610', '2611']);
+    // landings go to the nearest knife only; a strip zone that is merely above the knife (not
+    // parented, templated with it or killed on pickup) is not the item's trigger
+    expect(findSelectionTriggers(graph, byName('dragon_knife')).map((s) => s.trigger.hammerId)).toEqual(['2611']);
     expect(findSelectionTriggers(graph, byName('giant_knife')).map((s) => s.trigger.hammerId)).toEqual(['2704']);
   });
 

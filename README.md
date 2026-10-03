@@ -19,6 +19,8 @@ English summary is at the bottom.
   - Workshop `.vpk`（単体、または `_dir.vpk` + `_000.vpk`… の分割形式）— 中の `*.vents_c`（エンティティランプ）を直接解析します。
     Workshop のアイテム（`steamapps\workshop\content\730\<ID>\<ID>.vpk`）はアドオン vpk の中に `maps/<マップ名>.vpk` が
     入れ子になっていますが、入れ子の vpk も（メモリに展開せず）そのまま辿ります。
+    パッケージに複数のマップ（3D スカイボックスや `maps/stages/` のステージ用マップ）があるときは、
+    `maps/` 直下でスカイボックスでないもののうちエンティティの多いマップを読みます（ze_castlevania など、ステージ用マップの方がファイルが大きいことがあります）。
     `point_template` の子ランプも読むので、テンプレートで生成される武器も一覧に出ます（`T` バッジ）。
   - Hammer `.vmap`（DMX binary 9）— プレハブの `.vmap` を一緒にドロップすると、プレハブ内のエンティティも
     `プレハブのnodeID:エンティティのnodeID` 形式の hammerid で取り込みます。
@@ -78,7 +80,10 @@ English summary is at the bottom.
 - `mode`: `1` なし / `2` Cooldown / `3` MaxUses / `4` CooldownAfterUses / `5` CounterValue。
 - `hammerid` は必ず文字列です（CS2Fixes が文字列として読み込みます）。
 - `triggers`: **eban 中のプレイヤーに触らせないトリガー** の一覧です（CS2Fixes は `trigger_teleport` / `trigger_multiple` / `trigger_once` の Touch をフックし、eban 者の接触だけを無効化します）。
-  ホルダーが触れてアイテムを発動するトリガーだけを入れてください。押し返しや heal などの **効果ゾーンを入れると eban 中のプレイヤーがその効果を受けなくなります**。ツールは発動用トリガーだけを候補にし、効果ゾーンや対象外クラスは検証で警告します。
+  どのアイテムに書いたかは関係なく、マップの設定全体に書かれた hammerid がすべて対象です。アイテムを **配るトリガー**
+  （アイテム部屋へのテレポート、アイテムの上の strip ゾーン、そのアイテムだけを出すトリガー）だけを入れてください。
+  押し返しや heal、ゾンビのダメージなどの **効果ゾーンを入れると eban 中のプレイヤーがその効果を受けなくなり**、
+  ステージ開始のトリガーを入れると eban 中のプレイヤーはステージを進められなくなります。ツールはナイフ / クラス系アイテムの配布トリガーだけを候補にし、効果ゾーンや対象外クラスは検証で警告します。
 - `templated`: 同じテンプレートから複数スポーンしたアイテムで、武器とハンドラの `_N` 接尾辞を突き合わせるためのフラグです。通常は自動判定で足ります。書く意味があるのは「武器はテンプレート生成だがハンドラはマップに 1 つだけ」のときにハンドラ側へ `false` を付ける場合で、ツールはその場合だけ出力します。
 
 ## 推定ロジックと、GFL 設定 211 件から見た傾向
@@ -91,27 +96,49 @@ English summary is at the bottom.
 | `button`（フックのみ、event なし）+ `OnPass` のフィルタ | 559 アイテム | 武器に親付けされたボタンは `{"type":"button","hammerid":..}` のみ、メッセージと cooldown は後段のフィルタ / リレー側に付ける |
 | `button` + `OnPressed` 単独 | 333 | 後段が無ければボタン自身に event `OnPressed`, mode 2 |
 | `button` + `OnTrigger` のリレー | 223 | リレーは `OnTrigger` |
-| `button` + `counterdown` / `counterup` | 102 | `math_counter` は counter タイプ（`OnHitMin` があれば down、`OnHitMax` なら up） |
+| `button` + `counterdown` / `counterup` | 102 | `math_counter` は counter タイプ。使用ごとに 1 ずつ増減する counter は mode 3 / 4（下記「counter」） |
 | `OnEqualTo` (logic_compare), `OnUser1/4`, `OnTrue` (logic_branch), `OnCaseNN` | 54 / 46 / 15 / 5 | イベント推定の事前確率に反映 |
 | イベント系ハンドラは `type` を書かない | 1074 | 出力も同じ（CS2Fixes は未指定 = Other） |
 | mode 2 の cooldown | 60 秒が最頻、次いで 50 / 65 / 75 / 70 / 90 / 80 | 秒数はマップの配線から推定（下記） |
 | mode 3 の maxuses | 1 が大半（152 / 252） | mode 3 で maxuses 0 は警告 |
-| `triggers` | 462 アイテム（ほぼ 1 件） | 武器に親付け / 武器を Kill する trigger_ を候補に |
+| `triggers` | 462 アイテム（ほぼ 1 件） | ナイフ / クラス系アイテムを配る trigger だけ（下記）。アイテムに組み込まれた trigger は載せない |
 
 **イベント推定**: エンティティが実際に発火している出力それぞれについて、その先の配線を 3 段まで追い、
 「遅延付きの `Unlock` / `Enable` に到達する（= クールダウン付きの能力本体）」出力を最優先、次に効果の数、
 最後に classname ごとの事前確率（filter → `OnPass`、button → `OnPressed`、relay → `OnTrigger` …）で順位付けします。
 自身を `Kill` / `Lock` するだけの出力は下位になります。ハンドラ編集欄の event 候補はこの順で並び、推定と違う値のときは根拠付きで提案が出ます。
 
-**クールダウン推定**: `Lock` → 遅延付き `Unlock`、`Disable` → 遅延付き `Enable`、ボタンの `wait`、
-logic_branch / logic_compare / math_counter の `SetValue 1` → 遅延付き `SetValue 0` から秒数を読みます。
-ハンドラ自身、その手前のボタン / physbox / game_ui、その先のフィルタ / リレー、親付けされた trigger を見ます。
+**クールダウン推定**: 使用そのものが起こす配線だけを見ます。押下（とハンドラの event）から出力を遅延を足し合わせながら追い、
+通り道のゲート（ボタン / フィルタ / relay / branch …）が `Lock` → `Unlock`、`Disable` → `Enable`、
+`SetValue 1` → `SetValue 0` で閉じてから再び開くまでの時間をクールダウンにします（ハンドラより手前のゲートを優先し、複数あれば最も遅いもの）。
+ゾンビの沈黙スキルが人間のアイテム relay を 8 秒止める、ボスの relay がアイテムの branch を戻す、といった他の配線からの再有効化は数えません。
+2 秒以下の遅延は連打防止として cooldown 0（GFL 設定もほぼ 0。CS2Fixes は 1 秒の猶予を持つのでゲーム内の差もありません）、
+ボタンの `wait` は既定値 3 秒を超えるときだけ数えます。counter の `OnHitMax` / `OnHitMin`（数回使った後のオーバーヒート）は毎回のクールダウンに含めません。
+使用がボタンを Lock したまま別の配線（ミニゲーム終了など）が Unlock するときは、その Unlock の遅延を使います。
 
 **game_ui（クラス系アイテムの左右クリック）**: `game_ui` 本体だけでなく、`vscripts=game_ui` を持ち `caseNN` に
 `PressedAttack` などのキー名を書いた `logic_case`（スクリプト実装。skyrim / minas tirith などの workshop マップで一般的）も
 game_ui として扱います。武器の `OnPlayerPickup → Activate` から ui を見つけ、キーごとの出力（`OnCaseNN` / `PressedAttack`）の先にある
 リレー / compare / counter をハンドラにします。キーが 2 つ以上あるときはハンドラの `name` にキー名（`Attack` / `Attack2` / `Forward` …）を入れます。
 ui 自身は、後ろに何も無いときだけハンドラになります。
+
+**フィルタの後ろ**: ボタン → フィルタ → relay / counter の鎖では、フィルタが使用者を確かめて後ろの relay / case / counter に
+渡すだけ（ボタンの `Lock` / `Unlock` のような後始末を除いて効果を持たない）なら、後ろの relay などをハンドラにします。
+GFL 設定はこの形のほとんどで後ろの relay を載せ、フィルタ自身が効果を持つときはフィルタを載せています。
+フィルタが自分だけで数える `math_counter`（そのアイテムの使用回数 / 弾数）を `Add` / `Subtract` するときは counter をハンドラにします
+（複数のアイテムのフィルタが数える共有 counter は除きます）。relay の cooldown は、手前のフィルタがボタンを Lock / Unlock する配線からも読みます。
+
+**counter**: CS2Fixes は mode 5（値の表示）の counter の使用をチャットに流しません。アイテムの使用（ボタン / game_ui から続く
+filter / relay）が 1 ずつ `Add` / `Subtract` し、タイマーや自分自身のループで増減せず、同じ所が後で戻しもしない counter は
+使用回数を数えているので mode 3（`Add` なら counterup、`Subtract` なら counterdown。回数は counter の min / max から）にし、
+クールダウンは手前の配線から読みます。上限で アイテムを Lock し N 秒後に戻す（counter の `SetValue 0` / `Unlock`）ものは mode 4、cooldown N。
+それ以外（タイマーで溜まるチャージ、30 ずつ減るゲージ、コンボメーター）は mode 5 / message false です。
+評価したマップでは GFL の mode 3 / 4 の counter 58 件中 57 件、mode 5 の 22 件すべてと一致します。
+使用が値を読むだけの counter（`GetValue` → compare：太陽が足りるか）はハンドラにせず、その先の compare の結果のうち
+アイテムを Lock する / クールダウンを持つ方を、色や音を返すだけの「足りない」側より優先します。
+
+**使用回数**: ハンドラ自身の出力が N 回しか発火しない（Hammer の Only once）ときは mode 3 / maxuses N にします。
+出力の無いボタンでも、アイテムのロジックが Lock / Unlock しているもの（ze_santassination_p）は +use のフックとして残します。
 
 **ハンドラにしないもの**: `Kill` / `Disable` / `Enable` / `Deactivate` / `CancelPending` / `Lock` / `Unlock` などの後始末入力は
 「ボタンから撃たれている」に数えません。`OnBreak` しか撃たない physbox（当たり判定）、出力の無い filter（ナイフ除去用の部品）、
@@ -126,11 +153,23 @@ strip を撃つ relay、ボタンから撃たれていない logic_timer は候�
 **ナイフ / クラス系アイテムの `triggers`**: ナイフは武器を strip しないと拾えないため、こうしたアイテムは
 「アイテムの上の strip ゾーン」と「そこへ飛ばすテレポート」で配られます。どちらも武器と名前でつながっていないので、
 `weapon_knife*` / `weapon_bayonet` のときは次を `triggers` 候補にします。
-- 武器のテンプレートを `ForceSpawn` する trigger（env_entity_maker 経由も含む）
-- 武器の周囲 256 ユニット以内の strip ゾーン。strip の判定は `player_weaponstrip` / `game_player_equip`、
-  `point_script` への `RunScriptInput "*Strip*"`、`point_entity_finder` の `FindEntity`（`OnFoundEntity → Kill`）
-- 着地点（`trigger_teleport` の `target`、または `point_teleport`）が武器から 384 ユニット以内、または strip ゾーンの上にあるテレポート。
-  着地点は **最も近い武器にだけ** 割り当てるので、隣のアイテムのテレポートは付きません
+- 武器のテンプレートを `ForceSpawn` する trigger（env_entity_maker 経由も含む）。ただし他のアイテムも出すもの、
+  扉を開ける / テレポートを有効にする / 壁を消すなどステージを進めるものはステージ開始のトリガーなので付けません
+  （GFL 設定はこの 17 件を載せ、ステージ開始のものは 1 つも載せていません）
+- マップが武器に結び付けている strip ゾーン: 武器と同じテンプレート lump にある、武器に親付けされている、
+  または武器の `OnPlayerPickup` の送り先（拾ったら Kill するもの）。結び付いたものが無いときだけ、武器の真上
+  32 ユニット以内にあって他の武器より近い strip ゾーンも入れます。位置が近いだけの strip ゾーン（ラウンド開始時の strip や
+  隣のアイテムのもの）は付けません（GFL 設定は結び付いた strip ゾーンの 136 / 139 を載せ、隣のアイテム寄りのものは 1 つも載せていません）。
+  strip の判定は `player_weaponstrip` / `game_player_equip`、`point_script` への `RunScriptInput "*Strip*"`、
+  `point_entity_finder` の `FindEntity`（`OnFoundEntity → Kill`）
+- 着地点（`trigger_teleport` の `target`、または `point_teleport`）が武器から 64 ユニット以内にあるテレポート。
+  着地点は **最も近い武器にだけ** 割り当てるので、隣のアイテムのテレポートは付きません（GFL 設定の着地点はどれも数十ユニット以内です）。
+  アイテム自身のロジックが有効にするテレポート（ゾンビが人間を引き寄せるポータルなど）は能力の一部なので付けません。
+  ハンドラから先の配線に加えて、`AddOutput` で実行時に結ばれる先（能力がポータルの maker を後から繋ぐもの）と、
+  武器自身の `OnPlayerPickup` 以外の出力（持ち主が抜けたときに、捕まえた人間を戻す救出テレポートを有効にする後始末）もたどります。
+
+アイテムに組み込まれた trigger（ホルダーが触れて発動するゾーン、武器に親付けされたダメージ / 重力ゾーン、拾えるようにする
+`ToggleCanBePickedUp` の trigger）はハンドラ探しには使いますが `triggers` には載せません。GFL 設定もこの種類は 1 つも載せていません（評価したマップで 0 / 44）。
 ヘッダの「エンティティ一覧を書き出す」で全エンティティを JSON 保存できるので、推定がうまくいかないマップはそのファイルで配線を確認できます。
 
 **I/O 検索**: 中央上のタブでマップ内の全接続を検索できます（例: `in:unlock`、`out:onpressed`、`from:materia`、`class:filter`、遅延ありのみ）。
@@ -220,6 +259,24 @@ npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] 
 
 `diagnose` は推定に失敗したマップを調べるためのもので、「ツールの提案 vs 設定」「設定のハンドラ / トリガーがどのエンティティで、誰に撃たれ、何を撃つか」「武器の周囲 512 ユニットにあるもの」を出します。テンプレート内のエンティティは、ローカル座標に加えてワールド座標も表示します。
 
+```bash
+# GFL の設定と照合して推定の精度を測る（Workshop フォルダを丸ごと指定できる）
+npm run evaluate -- <CS2-ZE-Configs/entwatch> "C:\Program Files (x86)\Steam\steamapps\workshop\content\730" --out eval
+```
+
+`evaluate` は、読み込めたマップのうち同名の GFL 設定があるものについて、設定の各アイテムでツールの提案と
+ハンドラ / トリガーの hammerid、type / event / mode / cooldown / maxuses を突き合わせ、`eval/report.md`（全体とマップ別の一致率）、
+`eval/details.md`（一致しなかったアイテムごとの差分）、`eval/results.json` を書き出します。複数のマップを含むパッケージでは
+設定と同名のマップを使い、ローダー単体なら別のマップを読む場合はレポートに出します。
+
+report.md 先頭の「ゲーム内で設定と同じ動きをするアイテム」は、CS2Fixes での動作で比べた指標です。ボタン単独で数えるか、
+ボタンのフック + 後段のフィルタ / リレーで数えるかといった書き方だけの違いは同じとみなし、次を確かめます:
+GFL がフックするボタンをフックしているか（CS2Fixes は button ハンドラで持ち主以外の +use を止めます）、GFL の各ハンドラに
+同じ使用で発火する相手があり余分なハンドラが無いか、チャット通知 / HUD 表示が同じか（mode 5 の counter は通知しません）、
+cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers（CS2Fixes と同じくマップ全体で比べます）。
+「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
+良くなったか確かめてください（2026-09 時点で、ゲーム内で同じ動き 65%、完全一致 50%）。
+
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
 ツールが再現できるかを採点します（無ければスキップ）。ヒューリスティクスを変えたときの回帰確認に使います。
@@ -243,7 +300,7 @@ npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] 
 | `src/model/stripperValidate.ts` | Stripper 設定の検証 |
 | `src/model/zip.ts` | 複数ファイルをまとめる zip 書き出し |
 | `src/ui/` | React UI（日本語 / English） |
-| `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート） |
+| `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート）, `evaluate.ts`（GFL 設定との一致率） |
 
 パーサは [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat) と
 [Datamodel.NET](https://github.com/ValveResourceFormat/Datamodel.NET) の実装を参照して書き、
@@ -264,6 +321,9 @@ push で `.github/workflows/pages.yml` がビルドして公開します。
 - `KeyValues origin` で位置を変えながら 1 つのテンプレートを何度も ForceSpawn するマップでは、テンプレート内の武器の位置は
   最初の maker / テンプレートの位置としてしか計算できません。
 - ハンドラの推定はあくまで雛形です。マップごとの仕様（cooldown 秒数、maxuses など）は必ず確認してください。
+- 同じ配線でも、ボタン単独を mode 2 / 3 で数える書き方と、ボタンはフックだけで後段のフィルタ / relay を数える書き方が
+  設定作者ごとに混在しています。ツールは多数派（後者）で出します。
+- 一部の GFL 設定が使う `"type": "counter"` / `"mode": 6` には対応していません（読み込むと other / mode 1 になります）。
 
 ---
 
@@ -286,18 +346,51 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   adjust event / mode / cooldown → download the jsonc. Existing configs can be imported and edited.
 - Suggestions follow the conventions of the 211 GFL CS2 ZE configs (plain `button` hook + `OnPass`/`OnTrigger` handler,
   `type` omitted for event handlers, counters for `math_counter`); the event is the output whose chain reaches a delayed
-  `Unlock`/`Enable` (or a `SetValue 1` / delayed `SetValue 0` pair on a branch / compare / counter), the cooldown is that
-  delay. An I/O search tab (`in:unlock`, `out:onpressed`, `class:filter`, …) lists every connection in the map and can
-  add a handler from any row.
+  `Unlock`/`Enable` (or a `SetValue 1` / delayed `SetValue 0` pair on a branch / compare / counter). The cooldown is read
+  from what the use itself sets off: the chain is followed from the press with the delays added up, and the cooldown is
+  the time until the gates the use goes through (button, filter, relay, branch; those in front of the handler first) are
+  open again. Re-enables from other wiring (a zombie silence, a boss relay) do not count, delays of 2 s or less are
+  double-press guards (cooldown 0), a button `wait` counts only above the default 3 s, and a counter's `OnHitMax` /
+  `OnHitMin` (an overheat after several uses) is not the per-use cooldown. An I/O search tab (`in:unlock`,
+  `out:onpressed`, `class:filter`, …) lists every connection in the map and can add a handler from any row.
 - Class items: a `game_ui`, or its script stand-in (a `logic_case` with `vscripts=game_ui` and `caseNN = PressedAttack…`),
   is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers (named
   `Attack` / `Attack2` … when there are several keys). Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
   count as "fed by a button", OnBreak-only physboxes, output-less filters, combo-step relays and strip relays are skipped.
   Entities in `NNN#entityLumpName` lumps get world positions (env_entity_maker or point_template origin + local origin) and
   the `[PR#]` / `&0000` name decorations are ignored when resolving names. Knife items get `triggers` from the trigger that
-  ForceSpawns their template, strip zones (`player_weaponstrip`, `point_script RunScriptInput "*Strip*"`,
-  `point_entity_finder` → Kill) within 256 units and teleports landing within 384 units, each landing assigned to the
-  nearest weapon only.
+  ForceSpawns their template (unless it spawns other items too or moves the stage on: opens doors, switches teleports,
+  removes walls — a stage start), strip zones (`player_weaponstrip`, `point_script RunScriptInput "*Strip*"`,
+  `point_entity_finder` → Kill) the map ties to the knife (same template lump, parented to it, or fired at by its
+  `OnPlayerPickup`; failing that, a zone within 32 units on top of it) and teleports landing within 64 units, each
+  landing assigned to the nearest weapon only (a teleport the item's own logic switches on is its ability, not listed;
+  that logic includes what an `AddOutput` wires up at run time and the weapon's own outputs other than
+  `OnPlayerPickup`, such as the clean-up that frees grabbed players when the holder leaves).
+- `triggers` are the ones ebanned players must not touch; CS2Fixes hooks every hammerid listed under any item. Triggers
+  built into the item (the zone the holder touches, hurt / gravity zones parented to the weapon, `ToggleCanBePickedUp`
+  pickups) help find the handlers but are never listed: ebanned players would become immune to them, and GFL lists
+  none of them (0 of 44 on the evaluated maps).
+- Button → filter → relay / counter: a filter that only checks the user and hands the use on to relays / cases /
+  counters is replaced by those (as in most GFL configs); a filter with effects of its own stays, unless it counts an
+  item-specific `math_counter`, which then reports the use. An output that fires only N times gives mode 3 / maxuses N.
+  A button without outputs that the item's logic locks and unlocks is still the +use hook.
+- Counters: CS2Fixes never announces the uses of a counter in mode 5 (a value). A counter the item's use steps by one
+  (Add → counterup, Subtract → counterdown), not driven by a timer or a loop of its own and not stepped back by the same
+  source, counts uses: mode 3 with the cooldown read in front of it, or mode 4 when reaching the limit locks the item
+  and frees it N seconds later. Everything else (a charge a timer refills, a gauge stepped by 30, a combo meter) stays
+  mode 5 with message false. On the evaluated maps this matches 57 of the 58 counters GFL writes in mode 3 / 4 and all 22
+  in mode 5. A counter the use only reads (`GetValue` → compare: enough sun?) is not the handler; of the compare's
+  outcomes the one that locks the item / has a cooldown wins over a colour-and-sound "not ready" reply.
+- Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
+  that is not a skybox and has the most entity data, not the biggest file.
+- Accuracy: `npm run evaluate -- <CS2-ZE-Configs/entwatch> <workshop/content/730 or map folders> --out eval` compares
+  the suggestions with the GFL configs of every map it can load (report.md, details.md, results.json). The headline
+  metric is whether an item would behave like the config in CS2Fixes: per-author style is accepted (counting the button
+  itself vs. a plain button hook plus the filter / relay behind it), and it checks that the buttons GFL hooks are hooked
+  (CS2Fixes blocks other players' +use on them), every GFL handler has a counterpart firing on the same use and there
+  are no extra ones, uses are announced / shown alike (a counter in mode 5 never announces), the cooldown is within 1 s
+  (2 s or less counts as none), the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Sept 2026: 65% behave the same in game, 50% are
+  identical; "What differs in game" lists the rest by kind. GFL's `"type": "counter"` / `"mode": 6` are not supported.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.

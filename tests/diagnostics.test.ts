@@ -34,7 +34,8 @@ const SKYRIM: Expect[] = [
   { name: 'Freeze Staff', weapon: '225', handlers: ['703'] },
   { name: 'Heal Staff', weapon: '401', handlers: ['402'] },
   { name: 'Elder Scroll', weapon: '723', handlers: ['1487'] },
-  { name: 'Zombie Wolf', weapon: '29224', handlers: ['29229', '29237'], triggers: ['987'], cooldown: { 29229: 2, 29237: 25 } },
+  // GFL writes 2s on 29229; delays up to 2s are left out as double-press guards (the same in game)
+  { name: 'Zombie Wolf', weapon: '29224', handlers: ['29229', '29237'], triggers: ['987'], cooldown: { 29229: 0, 29237: 25 } },
   { name: 'Zombie Troll', weapon: '29179', handlers: ['29184', '29185'], triggers: ['990'] },
   { name: 'Zombie Giant', weapon: '29267', handlers: ['29270', '29271'], triggers: ['994'], notTriggers: ['987', '990'], cooldown: { 29270: 5, 29271: 15 } },
   { name: 'Zombie Dragonpriest', weapon: '29313', handlers: ['29317'], triggers: ['1088'] },
