@@ -69,8 +69,19 @@ English summary is at the bottom.
         "color": "red",
         "triggers": ["1207"],        // 任意: 関連する trigger_ の hammerid
         "handlers": [
-            { "type": "button", "hammerid": "1202", "mode": 1, "message": false, "ui": false },
-            { "type": "other", "hammerid": "1203", "event": "OnPass", "mode": 2, "cooldown": 45, "maxuses": 0, "message": true, "ui": true }
+            {
+                "type": "button",    // +use のフックだけ（持ち主以外の使用を止める）
+                "hammerid": "1202"
+            },
+            {
+                "hammerid": "1204",  // type を書かない = other（event の出力を監視）
+                "event": "OnTrigger",
+                "mode": 2,
+                "cooldown": 45,
+                "maxuses": 0,
+                "message": true,
+                "ui": true
+            }
         ]
     }
 ]
@@ -78,6 +89,18 @@ English summary is at the bottom.
 
 - `type`: `button`（+use をフック）/ `counterup` / `counterdown`（`math_counter`、`OutValue` を追跡）/ それ以外は `event` で指定した出力を監視。
 - `mode`: `1` なし / `2` Cooldown / `3` MaxUses / `4` CooldownAfterUses / `5` CounterValue。
+- **mode ごとに書くフィールド**（CS2Fixes `entwatch.cpp` が読むものだけ。GFL 設定の書き方と同じ）:
+
+  | ハンドラ | 書くフィールド |
+  | --- | --- |
+  | フックだけのボタン | `type`, `hammerid` |
+  | mode 1（なし） | `event`, `mode`, `cooldown: 0`, `maxuses: 0`, `message`, `ui`（cooldown / maxuses は使われないので 0） |
+  | mode 2（Cooldown） | `event`, `mode`, `cooldown`, `maxuses: 0`, `message`, `ui` |
+  | mode 3 / 4 | `event`, `mode`, `cooldown`（mode 3 は使用の間隔）, `maxuses`, `message`, `ui` |
+  | counter（mode 3 / 4） | `type`, `hammerid`, `mode`, `cooldown`, `message`, `ui`（`event` は OutValue 固定、使用回数は math_counter の min / max で決まるので書かない） |
+  | counter（mode 5） | `type`, `hammerid`, `mode`, (`offset`), `ui`（値を表示するだけで使用を通知しないので cooldown / maxuses / message は書かない） |
+
+  編集画面でも、その mode で使われない cooldown / maxuses / message は灰色になり、値を入れても書き出されません。
 - `hammerid` は必ず文字列です（CS2Fixes が文字列として読み込みます）。
 - `triggers`: **eban 中のプレイヤーに触らせないトリガー** の一覧です（CS2Fixes は `trigger_teleport` / `trigger_multiple` / `trigger_once` の Touch をフックし、eban 者の接触だけを無効化します）。
   どのアイテムに書いたかは関係なく、マップの設定全体に書かれた hammerid がすべて対象です。アイテムを **配るトリガー**
@@ -98,6 +121,11 @@ English summary is at the bottom.
 | `button` + `OnTrigger` のリレー | 223 | リレーは `OnTrigger` |
 | `button` + `counterdown` / `counterup` | 102 | `math_counter` は counter タイプ。使用ごとに 1 ずつ増減する counter は mode 3 / 4（下記「counter」） |
 | `OnEqualTo` (logic_compare), `OnUser1/4`, `OnTrue` (logic_branch), `OnCaseNN` | 54 / 46 / 15 / 5 | イベント推定の事前確率に反映 |
+| cooldown が無いハンドラは mode 1（`cooldown: 0`）| mode 1: 54 / mode 2 で cooldown 0: 3 | 使用が何もロックしないときは mode 1、message false（無制限に使えるので使うたびにチャットが流れる。GFL も mode 1 の 2/3 が false） |
+| cooldown 5 秒以下の mode 2 は `message: false` | 53 / 62 | 連打する攻撃はチャットに出さない。10 秒以下でも、同じアイテムに長い cooldown の能力があれば false（Healmage 8 秒 + 40 秒） |
+| 値を表示する counter（mode 5）の前のボタンはフックだけ | 34 アイテム（数えるボタン + mode 5 は 0） | 後段に何かハンドラがあればボタンは常に `{"type":"button","hammerid":..}` |
+| `transfer` を必ず書く | 1757 / 1775 アイテム | ナイフは false、それ以外は true（CS2Fixes の自動判定と同じ値） |
+| ハンドラの並び / 名前 | 複数ハンドラのアイテムの 64% は名前なし | ボタン → Attack → Attack2 … の順。キー名は付けず、同じキーに複数の能力があるときだけ targetname の違う部分を名前にする（`shout_fire` / `shout_freeze` → `Fire` / `Freeze`） |
 | イベント系ハンドラは `type` を書かない | 1074 | 出力も同じ（CS2Fixes は未指定 = Other） |
 | mode 2 の cooldown | 60 秒が最頻、次いで 50 / 65 / 75 / 70 / 90 / 80 | 秒数はマップの配線から推定（下記） |
 | mode 3 の maxuses | 1 が大半（152 / 252） | mode 3 で maxuses 0 は警告 |
@@ -112,14 +140,25 @@ English summary is at the bottom.
 通り道のゲート（ボタン / フィルタ / relay / branch …）が `Lock` → `Unlock`、`Disable` → `Enable`、
 `SetValue 1` → `SetValue 0` で閉じてから再び開くまでの時間をクールダウンにします（ハンドラより手前のゲートを優先し、複数あれば最も遅いもの）。
 ゾンビの沈黙スキルが人間のアイテム relay を 8 秒止める、ボスの relay がアイテムの branch を戻す、といった他の配線からの再有効化は数えません。
-2 秒以下の遅延は連打防止として cooldown 0（GFL 設定もほぼ 0。CS2Fixes は 1 秒の猶予を持つのでゲーム内の差もありません）、
+2 秒以下の遅延は連打防止として cooldown 0 / mode 1（GFL 設定もほぼ 0。CS2Fixes は 1 秒の猶予を持つのでゲーム内の差もありません）、
 ボタンの `wait` は既定値 3 秒を超えるときだけ数えます。counter の `OnHitMax` / `OnHitMin`（数回使った後のオーバーヒート）は毎回のクールダウンに含めません。
-使用がボタンを Lock したまま別の配線（ミニゲーム終了など）が Unlock するときは、その Unlock の遅延を使います。
+使用がボタンを Lock したまま別の配線（ミニゲーム終了など）が Unlock するときは、その Unlock の遅延を使います（遅延の無い Unlock なら
+mode 2 / cooldown 0 のまま「手で入れてください」とメモに出します）。秒数は GFL 設定と同じく整数か .5 で書きます
+（3.75 秒 → 3、59.9 秒 → 60。GFL の cooldown は 1338 件中 1316 件が整数で、残りは .5）。
+
+**mode の決め方**: 使用が何も閉じない（クールダウンが無い）ハンドラは mode 1 / cooldown 0 / message false、クールダウンがあれば mode 2、
+回数が決まっていれば mode 3 です。回数は、ハンドラの出力が N 回しか発火しない（Only once）、使用が 1 ずつ数える counter が上限で
+ハンドラ（か手前のボタン）を Kill / Lock する（skyrim Daedric: 2 回で mode 3 / maxuses 2）、使用がハンドラや手前のボタンを Kill する・
+二度と開かない Lock をかける（1 回）、のどれかから読みます。ゲートが数える counter が上限でアイテムを N 秒止めて戻す（N 回使うと
+クールダウン）ときは、その counter を mode 4 のハンドラにします（minas Oil Barrel、GFL も counter を載せています）。
 
 **game_ui（クラス系アイテムの左右クリック）**: `game_ui` 本体だけでなく、`vscripts=game_ui` を持ち `caseNN` に
 `PressedAttack` などのキー名を書いた `logic_case`（スクリプト実装。skyrim / minas tirith などの workshop マップで一般的）も
 game_ui として扱います。武器の `OnPlayerPickup → Activate` から ui を見つけ、キーごとの出力（`OnCaseNN` / `PressedAttack`）の先にある
-リレー / compare / counter をハンドラにします。キーが 2 つ以上あるときはハンドラの `name` にキー名（`Attack` / `Attack2` / `Forward` …）を入れます。
+リレー / compare / counter をハンドラにします。並びは Attack → Attack2 → …（GFL と同じく主攻撃が先）で、キー名は `name` に入れません
+（GFL は 2 キーのアイテムでも名前を付けていません）。同じキーに複数の能力がぶら下がるときだけ、targetname の違う部分を名前にします
+（skyrim Dovahkiin の `shout_fire` / `shout_freeze` / `shout_push` → `Fire` / `Freeze` / `Push`）。アイテムのレベルごとに用意された
+同じ能力のコピー（`rynnak` / `rynnak2` / `rynnak3`: 名前が番号違いで、どれも startdisabled、同じキーから撃たれる）は最初の 1 つだけにします。
 ui 自身は、後ろに何も無いときだけハンドラになります。
 
 **フィルタの後ろ**: ボタン → フィルタ → relay / counter の鎖では、フィルタが使用者を確かめて後ろの relay / case / counter に
@@ -132,7 +171,9 @@ GFL 設定はこの形のほとんどで後ろの relay を載せ、フィルタ
 filter / relay）が 1 ずつ `Add` / `Subtract` し、タイマーや自分自身のループで増減せず、同じ所が後で戻しもしない counter は
 使用回数を数えているので mode 3（`Add` なら counterup、`Subtract` なら counterdown。回数は counter の min / max から）にし、
 クールダウンは手前の配線から読みます。上限で アイテムを Lock し N 秒後に戻す（counter の `SetValue 0` / `Unlock`）ものは mode 4、cooldown N。
-それ以外（タイマーで溜まるチャージ、30 ずつ減るゲージ、コンボメーター）は mode 5 / message false です。
+それ以外（タイマーで溜まるチャージ、30 ずつ減るゲージ、コンボメーター）は mode 5 です（cooldown / maxuses / message は書きません）。
+mode 5 の counter の手前のボタンもフックだけにします（GFL は 34 アイテムがこの形で、数えるボタンと並べた例はありません）。
+同じ押下が使用回数の counter を数えつつ relay も撃つときは、counter だけを載せます（同じ使用を 2 回チャットに出さないため。skyrim Heal Staff）。
 評価したマップでは GFL の mode 3 / 4 の counter 58 件中 57 件、mode 5 の 22 件すべてと一致します。
 使用が値を読むだけの counter（`GetValue` → compare：太陽が足りるか）はハンドラにせず、その先の compare の結果のうち
 アイテムを Lock する / クールダウンを持つ方を、色や音を返すだけの「足りない」側より優先します。
@@ -262,6 +303,9 @@ npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] 
 ```bash
 # GFL の設定と照合して推定の精度を測る（Workshop フォルダを丸ごと指定できる）
 npm run evaluate -- <CS2-ZE-Configs/entwatch> "C:\Program Files (x86)\Steam\steamapps\workshop\content\730" --out eval
+
+# dump:entities の JSON（*.entities.json、またはそれを入れたフォルダ）でも測れる。マップのファイルが無い環境向け
+npm run evaluate -- <CS2-ZE-Configs/entwatch> dumps/ --out eval
 ```
 
 `evaluate` は、読み込めたマップのうち同名の GFL 設定があるものについて、設定の各アイテムでツールの提案と
@@ -276,6 +320,10 @@ GFL がフックするボタンをフックしているか（CS2Fixes は button
 cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers（CS2Fixes と同じくマップ全体で比べます）。
 「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
 良くなったか確かめてください（2026-09 時点で、ゲーム内で同じ動き 65%、完全一致 50%）。
+
+「GFL と同じに書かれるアイテム」は、書き出したハンドラのエントリ（mode ごとに書くキーと値）が GFL の設定と並び順まで同じアイテムの割合、
+「GFL のハンドラエントリをそのまま書けた数」はエントリ単位の一致数です。details.md には一致しないアイテムの両方のエントリが出ます。
+skyrim / minas tirith のダンプでは、エントリ単位で 3/43 → 22/43、アイテム単位で 10/42 → 17/42 になりました（2026-10）。
 
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
@@ -351,11 +399,24 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   the time until the gates the use goes through (button, filter, relay, branch; those in front of the handler first) are
   open again. Re-enables from other wiring (a zombie silence, a boss relay) do not count, delays of 2 s or less are
   double-press guards (cooldown 0), a button `wait` counts only above the default 3 s, and a counter's `OnHitMax` /
-  `OnHitMin` (an overheat after several uses) is not the per-use cooldown. An I/O search tab (`in:unlock`,
+  `OnHitMin` (an overheat after several uses) is not the per-use cooldown. Seconds are written as GFL writes them:
+  whole or .5 (3.75 → 3, 59.9 → 60). An I/O search tab (`in:unlock`,
   `out:onpressed`, `class:filter`, …) lists every connection in the map and can add a handler from any row.
+- Modes and fields as the GFL configs write them: a handler whose use holds nothing back is mode 1 (cooldown 0, chat off:
+  GFL has 54 such handlers and 3 in mode 2 with cooldown 0), mode 2 with a cooldown, mode 3 when the uses are counted
+  (an output that fires N times; a counter the use steps that kills / locks the handler at its limit, skyrim Daedric:
+  2 uses; a use that removes the handler or the button in front of it, or locks it with nothing opening it again: 1 use).
+  A gate stepping a counter that holds the item back for N s after its last use is replaced by that counter in mode 4
+  (minas Oil Barrel). Cooldowns of 5 s or less (and up to 10 s next to a longer ability) keep the chat off (53 of 62 in
+  GFL). The jsonc carries only what the mode reads: counters never write `event` / `maxuses` (CS2Fixes forces OutValue and
+  reads min / max), mode 5 writes `type` / `hammerid` / `mode` / `offset` / `ui`, modes without a cooldown / max uses
+  write 0, and `transfer` is always written (false for knives). Read back and written without comments, 141 of the 211
+  GFL files come out byte-identical. The editor greys out the fields a mode ignores.
 - Class items: a `game_ui`, or its script stand-in (a `logic_case` with `vscripts=game_ui` and `caseNN = PressedAttack…`),
-  is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers (named
-  `Attack` / `Attack2` … when there are several keys). Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
+  is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers, listed
+  Attack, Attack2, … and unnamed like GFL; several abilities on one key are named from what sets their targetnames apart
+  (`shout_fire` / `shout_freeze` → Fire / Freeze), and level copies of one ability (`rynnak` / `rynnak2` / `rynnak3`,
+  all starting disabled) collapse to the first. Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
   count as "fed by a button", OnBreak-only physboxes, output-less filters, combo-step relays and strip relays are skipped.
   Entities in `NNN#entityLumpName` lumps get world positions (env_entity_maker or point_template origin + local origin) and
   the `[PR#]` / `&0000` name decorations are ignored when resolving names. Knife items get `triggers` from the trigger that
@@ -378,8 +439,9 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   (Add → counterup, Subtract → counterdown), not driven by a timer or a loop of its own and not stepped back by the same
   source, counts uses: mode 3 with the cooldown read in front of it, or mode 4 when reaching the limit locks the item
   and frees it N seconds later. Everything else (a charge a timer refills, a gauge stepped by 30, a combo meter) stays
-  mode 5 with message false. On the evaluated maps this matches 57 of the 58 counters GFL writes in mode 3 / 4 and all 22
-  in mode 5. A counter the use only reads (`GetValue` → compare: enough sun?) is not the handler; of the compare's
+  mode 5, behind a plain +use hook (GFL: 34 items, never a counted button next to it). A press that steps a use counter
+  and triggers a relay is reported once, by the counter. On the evaluated maps this matches 57 of the 58 counters GFL
+  writes in mode 3 / 4 and all 22 in mode 5. A counter the use only reads (`GetValue` → compare: enough sun?) is not the handler; of the compare's
   outcomes the one that locks the item / has a cooldown wins over a colour-and-sound "not ready" reply.
 - Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
   that is not a skybox and has the most entity data, not the biggest file.
@@ -390,7 +452,10 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   (CS2Fixes blocks other players' +use on them), every GFL handler has a counterpart firing on the same use and there
   are no extra ones, uses are announced / shown alike (a counter in mode 5 never announces), the cooldown is within 1 s
   (2 s or less counts as none), the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Sept 2026: 65% behave the same in game, 50% are
-  identical; "What differs in game" lists the rest by kind. GFL's `"type": "counter"` / `"mode": 6` are not supported.
+  identical; "What differs in game" lists the rest by kind. It also reports the items whose handler entries are written
+  exactly like GFL (keys and values per mode, same order); on the skyrim / minas dumps 22 of 43 GFL entries are
+  reproduced exactly (3 before). Entity dumps (`*.entities.json` from `npm run dump:entities`) can be evaluated instead of
+  map files. GFL's `"type": "counter"` / `"mode": 6` are not supported.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.
