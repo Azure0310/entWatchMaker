@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { EntityConnection, MapEntity } from '../model/entity';
 import { friendlyName } from '../model/entity';
-import { newHandler } from '../model/entwatch';
-import { inferCooldown } from '../model/cooldown';
+import { handlerFromSuggestion, suggestHandler } from '../model/suggest';
 import { EntityChip } from './EntityChip';
 import { store, useAppState } from './store';
 import { addTrigger, updateItem } from './actions';
@@ -95,14 +94,8 @@ export function IoSearch() {
       addTrigger(item.uid, e.hammerId);
       return;
     }
-    const cd = inferCooldown(graph, e);
-    const h = newHandler({
-      type: e.classname === 'func_button' || e.classname === 'func_rot_button' || e.classname.startsWith('func_physbox') ? 'button' : 'other',
-      hammerid: e.hammerId,
-      event: row.connection.output,
-      mode: 2,
-      cooldown: cd?.seconds ?? 0,
-    });
+    // the row's output is the event; mode / cooldown / max uses / chat follow from what it sets off
+    const h = handlerFromSuggestion(e, suggestHandler(e, graph, row.connection.output));
     updateItem(item.uid, { handlers: [...(store.get().config.items.find((i) => i.uid === item.uid)?.handlers ?? []), h] });
   };
 

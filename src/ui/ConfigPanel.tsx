@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { ENTWATCH_COLORS, HANDLER_MODES, usesCooldown, usesMaxUses, usesMessage, type HandlerConfig, type HandlerType, type ItemConfig } from '../model/entwatch';
 import { friendlyName } from '../model/entity';
-import { outputChoices, suggestHandler } from '../model/suggest';
+import { handlerFromSuggestion, outputChoices, suggestHandler } from '../model/suggest';
 import { suggestEvents } from '../model/events';
 import type { ValidationIssue } from '../model/validate';
 import {
@@ -87,15 +87,8 @@ function HandlerEditor({ item, h, issues }: { item: ItemConfig; h: HandlerConfig
             className="mini"
             title={t('cfg.h.suggest')}
             onClick={() => {
-              const s = suggestHandler(ent, graph ?? undefined);
-              set({
-                type: s.type,
-                event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
-                mode: s.mode,
-                cooldown: s.cooldown ?? 0,
-                maxuses: s.maxuses ?? 0,
-                message: s.message ?? true,
-              });
+              const { type, event, mode, cooldown, maxuses, message } = handlerFromSuggestion(ent, suggestHandler(ent, graph ?? undefined));
+              set({ type, event, mode, cooldown, maxuses, message });
             }}
           >
             ✨

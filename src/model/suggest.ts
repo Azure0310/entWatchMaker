@@ -123,11 +123,12 @@ const SHORT_SIBLING_COOLDOWN = 10;
  * removes it), and 1 when nothing holds the next use back (cooldown 0, chat off: every use would
  * be printed).
  */
-export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSuggestion {
+export function suggestHandler(e: MapEntity, graph?: EntityGraph, event?: string): HandlerSuggestion {
   const s = suggestHandlerBase(e);
   if (graph && s.type !== 'counterup' && s.type !== 'counterdown') {
-    const top = suggestEvents(graph, e)[0];
-    if (top) {
+    const top = event ? undefined : suggestEvents(graph, e)[0];
+    if (event) s.event = event;
+    else if (top) {
       s.event = top.event;
       s.eventReason = top.reason;
     }
@@ -184,6 +185,20 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
     }
   }
   return s;
+}
+
+/** The handler entry for a suggestion: what auto-add, "+", the I/O search and ✨ write. */
+export function handlerFromSuggestion(e: MapEntity, s: HandlerSuggestion, partial: Partial<HandlerConfig> = {}): HandlerConfig {
+  return newHandler({
+    type: s.type,
+    hammerid: e.hammerId,
+    event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
+    mode: s.mode,
+    cooldown: s.cooldown ?? 0,
+    maxuses: s.maxuses ?? 0,
+    message: s.message ?? true,
+    ...partial,
+  });
 }
 
 function suggestHandlerBase(e: MapEntity): HandlerSuggestion {
@@ -862,15 +877,8 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   for (const { c, extra } of chosen) {
     const ent = c.entity;
     const s = suggestHandler(ent, graph);
-    const h: HandlerConfig = newHandler({
+    const h: HandlerConfig = handlerFromSuggestion(ent, s, {
       name: names.get(c),
-      type: s.type,
-      hammerid: ent.hammerId,
-      event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
-      mode: s.mode,
-      cooldown: s.cooldown ?? 0,
-      maxuses: s.maxuses ?? 0,
-      ...(s.message === false ? { message: false } : {}),
       // CS2Fixes auto-detects templated entities from the _N name suffix; the only value worth
       // writing is "false" for a shared (non-templated) handler of a templated weapon
       templated: e.source.templated && !ent.source.templated ? false : undefined,

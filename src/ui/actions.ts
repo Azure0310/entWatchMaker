@@ -3,7 +3,7 @@ import { buildGraph } from './store';
 import type { MapEntity, ParsedMap } from '../model/entity';
 import { friendlyName } from '../model/entity';
 import { newHandler, newItem, parseEntWatchConfig, serializeEntWatchConfig, type EntWatchConfig, type HandlerConfig, type ItemConfig } from '../model/entwatch';
-import { suggestHandler, suggestItemForWeapon } from '../model/suggest';
+import { handlerFromSuggestion, suggestHandler, suggestItemForWeapon } from '../model/suggest';
 import { parseMapFiles } from '../worker/client';
 import { buildDemoMap } from '../model/demo';
 import { hintsFromGraph, hintsFromJsonc, remapConfig, replaceHammerId, staleHammerIds, type HintMap } from '../model/remap';
@@ -268,14 +268,7 @@ export function setItemWeapon(uid: string, entity: MapEntity): void {
 export function addHandler(itemUid: string, entity?: MapEntity): void {
   let h: HandlerConfig;
   if (entity) {
-    const s = suggestHandler(entity, store.get().graph ?? undefined);
-    h = newHandler({
-      type: s.type,
-      hammerid: entity.hammerId,
-      event: s.type === 'counterup' || s.type === 'counterdown' ? undefined : s.event,
-      mode: s.mode,
-      cooldown: s.cooldown ?? 0,
-    });
+    h = handlerFromSuggestion(entity, suggestHandler(entity, store.get().graph ?? undefined));
   } else {
     h = newHandler();
   }
