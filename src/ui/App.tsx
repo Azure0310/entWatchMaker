@@ -5,7 +5,7 @@ import { clearMap, exportEntityDump, setLang } from './actions';
 import { setMode } from './stripperActions';
 import { StripperJsonPanel } from './StripperJsonPanel';
 import { StripperPanel } from './StripperPanel';
-import { ConfigPanel } from './ConfigPanel';
+import { ConfigPanel, ItemListPanel } from './ConfigPanel';
 import { DropZone } from './DropZone';
 import { EntityList } from './EntityList';
 import { Inspector } from './Inspector';
@@ -104,6 +104,7 @@ export function App() {
         <main className="workspace">
           <section className="col left">
             <EntityList />
+            {!stripperMode && <ItemListPanel issues={issues} />}
           </section>
           <section className="col center">
             <RelationTree />

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { ENTWATCH_COLORS, HANDLER_MODES, type HandlerConfig, type HandlerType, type ItemConfig } from '../model/entwatch';
 import { friendlyName } from '../model/entity';
 import { outputChoices, suggestHandler } from '../model/suggest';
@@ -276,11 +276,52 @@ function ItemEditor({ item, issues }: { item: ItemConfig; issues: ValidationIssu
   );
 }
 
-export function ConfigPanel({ issues }: { issues: ValidationIssue[] }) {
+function ItemRow({ item, index, issues, selected }: { item: ItemConfig; index: number; issues: ValidationIssue[]; selected: boolean }) {
   const t = useT();
-  const { config, selectedItemUid, map, suggestionNotes } = useAppState();
-  const [showNotes, setShowNotes] = useState(true);
-  const selected = config.items.find((i) => i.uid === selectedItemUid) ?? null;
+  const worst = issues.some((i) => i.level === 'error') ? 'error' : issues.some((i) => i.level === 'warning') ? 'warning' : issues.length > 0 ? 'info' : '';
+  const stop = (e: ReactMouseEvent<HTMLButtonElement>) => e.stopPropagation();
+  return (
+    <div className={`item-row${selected ? ' selected' : ''}`} onClick={() => selectItem(item.uid)} data-testid="item-row" aria-selected={selected}>
+      <span className="item-index muted small">{index + 1}</span>
+      <span className={`swatch sw-${item.color}`} />
+      <span className="item-name" title={item.name}>
+        {item.name || <span className="muted">(item {index + 1})</span>}
+      </span>
+      <span className="mono small">#{item.hammerid || '?'}</span>
+      <span className="muted small item-meta" title={`${item.handlers.length} handlers / ${item.triggers.length} triggers`}>
+        {item.handlers.length}h{item.triggers.length > 0 ? ` ${item.triggers.length}t` : ''}
+      </span>
+      {worst && <span className={`dot ${worst}`} />}
+      <button type="button" className="mini aux" onClick={(e) => { stop(e); moveItem(item.uid, -1); }} title={t('cfg.up')}>
+        ↑
+      </button>
+      <button type="button" className="mini aux" onClick={(e) => { stop(e); moveItem(item.uid, 1); }} title={t('cfg.down')}>
+        ↓
+      </button>
+      <button type="button" className="mini aux" onClick={(e) => { stop(e); duplicateItem(item.uid); }} title={t('cfg.duplicate')}>
+        ⧉
+      </button>
+      <button
+        type="button"
+        className="mini danger"
+        onClick={(e) => {
+          stop(e);
+          if (window.confirm(t('cfg.deleteConfirm', { name: item.name || item.hammerid }))) removeItem(item.uid);
+        }}
+        title={t('cfg.delete')}
+        data-testid="remove-item"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+/** The list of configured items (left column, under the map entities). */
+export function ItemListPanel({ issues }: { issues: ValidationIssue[] }) {
+  const t = useT();
+  const { config, selectedItemUid, map } = useAppState();
+  const listRef = useRef<HTMLDivElement>(null);
   const issuesByItem = useMemo(() => {
     const m = new Map<string, ValidationIssue[]>();
     for (const i of issues) {
@@ -291,30 +332,33 @@ export function ConfigPanel({ issues }: { issues: ValidationIssue[] }) {
     return m;
   }, [issues]);
 
+  // Keep the selected row in view when the selection comes from elsewhere (inspector, auto-add, delete).
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const row = list?.querySelector<HTMLElement>('.item-row.selected');
+    if (!list || !row) return;
+    if (row.offsetTop < list.scrollTop) list.scrollTop = row.offsetTop;
+    else if (row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = row.offsetTop + row.offsetHeight - list.clientHeight;
+  }, [selectedItemUid]);
+
   return (
-    <div className="panel config-panel">
+    <div className="panel items-panel" data-testid="items-panel">
       <div className="panel-head row">
-        <strong>{t('cfg.title')}</strong>
-        <span className="spacer" />
-        <button type="button" className="btn" onClick={() => addEmptyItem()} data-testid="add-empty-item">
-          + {t('cfg.newItem')}
-        </button>
+        <strong>{t('cfg.itemsTitle')}</strong>
         {config.items.length > 0 && (
-          <button
-            type="button"
-            className="btn"
-            data-testid="clear-all"
-            onClick={() => {
-              if (window.confirm(t('cfg.clearAllConfirm', { n: config.items.length }))) clearConfig();
-            }}
-          >
-            ✕ {t('cfg.clearAll')}
-          </button>
+          <span className="muted small" data-testid="item-count">
+            {t('cfg.itemCount', { n: config.items.length })}
+          </span>
         )}
+        <span className="spacer" />
+        <button type="button" className="btn" onClick={() => addEmptyItem()} title={t('cfg.newItem')} data-testid="add-empty-item">
+          + {t('cfg.newItemShort')}
+        </button>
         {map && map.stats.weapons > 0 && (
           <button
             type="button"
             className="btn"
+            title={t('cfg.autoAll')}
             data-testid="auto-add-all"
             onClick={() => {
               if (window.confirm(t('cfg.autoAllConfirm', { n: map.stats.weapons }))) {
@@ -323,42 +367,59 @@ export function ConfigPanel({ issues }: { issues: ValidationIssue[] }) {
               }
             }}
           >
-            ✨ {t('cfg.autoAll')}
+            ✨ {t('cfg.autoAllShort')}
+          </button>
+        )}
+        {config.items.length > 0 && (
+          <button
+            type="button"
+            className="btn danger-btn"
+            title={t('cfg.clearAll')}
+            data-testid="clear-all"
+            onClick={() => {
+              if (window.confirm(t('cfg.clearAllConfirm', { n: config.items.length }))) clearConfig();
+            }}
+          >
+            ✕ {t('cfg.clearAllShort')}
           </button>
         )}
       </div>
-      <div className="panel-body config-body">
-        <div className="item-list" data-testid="item-list">
-          {config.items.length === 0 && <div className="muted small pad">{t('cfg.noItems')}</div>}
-          {config.items.map((item, idx) => {
-            const its = issuesByItem.get(item.uid) ?? [];
-            const worst = its.some((i) => i.level === 'error') ? 'error' : its.some((i) => i.level === 'warning') ? 'warning' : its.length > 0 ? 'info' : '';
-            return (
-              <div key={item.uid} className={`item-row${item.uid === selectedItemUid ? ' selected' : ''}`} onClick={() => selectItem(item.uid)} data-testid="item-row">
-                <span className={`swatch sw-${item.color}`} />
-                <span className="item-name">{item.name || <span className="muted">(item {idx + 1})</span>}</span>
-                <span className="mono small">#{item.hammerid || '?'}</span>
-                <span className="muted small">
-                  {item.handlers.length}h {item.triggers.length > 0 ? `${item.triggers.length}t` : ''}
-                </span>
-                {worst && <span className={`dot ${worst}`} />}
-                <span className="spacer" />
-                <button type="button" className="mini" onClick={(e) => { e.stopPropagation(); moveItem(item.uid, -1); }} title={t('cfg.up')}>
-                  ↑
-                </button>
-                <button type="button" className="mini" onClick={(e) => { e.stopPropagation(); moveItem(item.uid, 1); }} title={t('cfg.down')}>
-                  ↓
-                </button>
-                <button type="button" className="mini" onClick={(e) => { e.stopPropagation(); duplicateItem(item.uid); }} title={t('cfg.duplicate')}>
-                  ⧉
-                </button>
-                <button type="button" className="mini danger" onClick={(e) => { e.stopPropagation(); if (window.confirm(t('cfg.deleteConfirm', { name: item.name || item.hammerid }))) removeItem(item.uid); }} title={t('cfg.delete')} data-testid="remove-item">
-                  ✕
-                </button>
-              </div>
-            );
-          })}
-        </div>
+      <div ref={listRef} className="panel-body item-list" data-testid="item-list">
+        {config.items.length === 0 && <div className="muted small pad">{t('cfg.noItems')}</div>}
+        {config.items.map((item, idx) => (
+          <ItemRow key={item.uid} item={item} index={idx} issues={issuesByItem.get(item.uid) ?? []} selected={item.uid === selectedItemUid} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Editor for the selected item (right column). */
+export function ConfigPanel({ issues }: { issues: ValidationIssue[] }) {
+  const t = useT();
+  const { config, selectedItemUid, suggestionNotes } = useAppState();
+  const [showNotes, setShowNotes] = useState(true);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const selected = config.items.find((i) => i.uid === selectedItemUid) ?? null;
+  const itemIssues = useMemo(() => (selected ? issues.filter((i) => i.itemUid === selected.uid) : []), [issues, selected]);
+
+  // show a newly selected item from the top
+  useLayoutEffect(() => {
+    if (detailRef.current) detailRef.current.scrollTop = 0;
+  }, [selectedItemUid]);
+
+  return (
+    <div className="panel config-panel">
+      <div className="panel-head row">
+        <strong>{t('cfg.title')}</strong>
+        {selected && (
+          <span className="muted small ellipsis" title={selected.name}>
+            {selected.name || `#${selected.hammerid}`}
+          </span>
+        )}
+      </div>
+      <div className="panel-body item-detail" ref={detailRef} data-testid="item-detail">
+        {!selected && <div className="muted small pad">{config.items.length === 0 ? t('cfg.noItems') : t('cfg.noSelection')}</div>}
         {selected && suggestionNotes.length > 0 && (
           <details className="notes" open={showNotes} onToggle={(e) => setShowNotes((e.target as HTMLDetailsElement).open)}>
             <summary>{t('sugg.notes')}</summary>
@@ -369,7 +430,7 @@ export function ConfigPanel({ issues }: { issues: ValidationIssue[] }) {
             </ul>
           </details>
         )}
-        {selected && <ItemEditor item={selected} issues={issuesByItem.get(selected.uid) ?? []} />}
+        {selected && <ItemEditor item={selected} issues={itemIssues} />}
       </div>
     </div>
   );
