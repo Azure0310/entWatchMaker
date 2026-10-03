@@ -169,6 +169,34 @@ describe('the handler list GFL writes', () => {
     expect(notes.some((n) => n.includes('oil_compare') && n.includes('counter reports the use'))).toBe(true);
   });
 
+  it('does not list a key that only switches what the other attack does (minas TNT barrel)', () => {
+    const weapon = mk('weapon_knife', 'tnt_knife', '160', {}, [c('OnPlayerPickup', 'tnt_ui', 'Activate')]);
+    const ui = mk('logic_case', 'tnt_ui', '161', { vscripts: 'game_ui', case15: 'PressedAttack', case16: 'PressedAttack2' }, [
+      c('OnCase15', 'tnt_mode', 'Compare'),
+      c('OnCase16', 'tnt_blast', 'Test'),
+    ]);
+    // the attack key flips a value the blast reads (by its own name, not !self) and shows it with a particle
+    const mode = mk('logic_compare', 'tnt_mode', '162', { comparevalue: '0', initialvalue: '1' }, [
+      c('OnEqualTo', 'tnt_push_on', 'SetValue', '1'),
+      c('OnNotEqualTo', 'tnt_push_on', 'SetValue', '0'),
+      c('OnEqualTo', 'tnt_glow', 'DestroyImmediately'),
+      c('OnNotEqualTo', 'tnt_glow', 'Start'),
+      c('OnEqualTo', 'tnt_mode', 'SetValue', '1'),
+      c('OnNotEqualTo', 'tnt_mode', 'SetValue', '0'),
+    ]);
+    const blast = mk('logic_branch', 'tnt_blast', '163', { initialvalue: '1' }, [
+      c('OnTrue', '!self', 'SetValue', '0'),
+      c('OnTrue', '!self', 'SetValue', '1', 20),
+      c('OnTrue', 'tnt_maker', 'ForceSpawn'),
+      c('OnTrue', 'tnt_push_on', 'Compare', '', 0.02),
+    ]);
+    const pushOn = mk('logic_compare', 'tnt_push_on', '164', { comparevalue: '0' }, [c('OnEqualTo', 'tnt_push', 'Enable')]);
+    const g = graphOf(weapon, ui, mode, blast, pushOn, mk('info_particle_system', 'tnt_glow', '165'), mk('env_entity_maker', 'tnt_maker', '166'), mk('trigger_push', 'tnt_push', '167'));
+    const { item, notes } = suggestItemForWeapon(weapon, g);
+    expect(item.handlers.map((h) => [h.hammerid, h.event, h.mode, h.cooldown])).toEqual([['163', 'OnTrue', 2, 20]]);
+    expect(notes.some((n) => n.includes('tnt_mode') && n.includes('mode switch'))).toBe(true);
+  });
+
   it('writes a plain +use hook in front of a counter shown as a value', () => {
     const weapon = mk('weapon_elite', 'ammo_wep', '140');
     const button = mk('func_button', 'ammo_button', '141', { parentname: 'ammo_wep' }, [c('OnPressed', 'ammo_filter', 'TestActivator')]);

@@ -69,7 +69,8 @@ const MINAS: Expect[] = [
   { name: 'Gandalf', weapon: '683', handlers: ['686'], optionalHandlers: ['687'], triggers: ['7787'], notTriggers: ['7781', '7785'], cooldown: { 686: 75 }, event: { 686: 'OnEqualTo' } },
   { name: 'White Knight', weapon: '695', handlers: ['713'], optionalHandlers: ['699'], triggers: ['7789'] },
   { name: 'Zombie Totem Pole', weapon: '900', triggers: ['7862'] },
-  { name: 'Zombie TNT Barrel', weapon: '1117', handlers: ['1115'], triggers: ['7864'], cooldown: { 1115: 20 }, event: { 1115: 'OnTrue' } },
+  // the attack key only switches whether the blast pushes (a particle shows it): not listed, as in GFL
+  { name: 'Zombie TNT Barrel', weapon: '1117', handlers: ['1115'], exact: true, triggers: ['7864'], cooldown: { 1115: 20 }, event: { 1115: 'OnTrue' } },
   { name: 'Zombie Ladder', weapon: '157', triggers: ['7866'] },
   { name: 'Zombie Troll', weapon: '348', triggers: ['7797'] },
   { name: 'Zombie Balrog', weapon: '716', handlers: ['720', '718'], exact: true, triggers: ['7799'], event: { 720: 'OnUser1', 718: 'OnUser1' }, cooldown: { 720: 3.5, 718: 15 }, message: { 720: false } },

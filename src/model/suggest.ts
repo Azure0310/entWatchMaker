@@ -317,25 +317,41 @@ interface Candidate {
 /**
  * What a gate does with its outputs. A combo step only arms / disarms other logic (Enable the
  * next step, Disable itself); a pass-through only hands the use on to other gates (Trigger /
- * Compare); anything else is an effect and makes the gate a handler candidate.
+ * Compare); a switch only stores values other logic reads and shows it (a particle, a sound: the
+ * mode the next attack uses); anything else is an effect and makes the gate a handler candidate.
  */
-function gateRole(graph: EntityGraph, x: MapEntity): { role: 'chain-step' | 'pass-through' | 'effects'; passOn: MapEntity[] } {
+function gateRole(graph: EntityGraph, x: MapEntity): { role: 'chain-step' | 'pass-through' | 'switch' | 'effects'; passOn: MapEntity[] } {
   let effects = 0;
+  let feedback = 0;
+  let storesOnOthers = 0;
   const passOn: MapEntity[] = [];
+  const ownName = friendlyName(x.targetname).toLowerCase();
   for (const c of x.connections) {
     const targets = graph.connectionTargets(x, c);
-    const self = c.target.toLowerCase() === '!self' || (targets.length > 0 && targets.every((t) => t.id === x.id));
+    // the graph leaves out links to itself, also when the gate names itself instead of !self
+    const self =
+      c.target.toLowerCase() === '!self' || (ownName.length > 0 && friendlyName(c.target).toLowerCase() === ownName) || (targets.length > 0 && targets.every((t) => t.id === x.id));
     const logicOnly = targets.length > 0 && targets.every((t) => t.id === x.id || isGate(t) || isCounter(t) || isFilter(t));
-    if (isArmInput(c.input) && (self || logicOnly)) continue;
+    if (isArmInput(c.input) && (self || logicOnly)) {
+      if (!self && VALUE_STORE_INPUTS.test(c.input)) storesOnOthers++;
+      continue;
+    }
     if (!self && logicOnly && !isGameUi(x)) {
       for (const t of targets) if (t.id !== x.id && !passOn.includes(t)) passOn.push(t);
+      continue;
+    }
+    if (targets.length > 0 && (FEEDBACK_INPUTS.has(c.input.toLowerCase()) || targets.every((t) => FEEDBACK_CLASSES.has(t.classname)))) {
+      feedback++;
       continue;
     }
     effects++;
   }
   if (effects > 0) return { role: 'effects', passOn };
+  if (feedback > 0) return { role: storesOnOthers > 0 && passOn.length === 0 ? 'switch' : 'effects', passOn };
   return { role: passOn.length > 0 ? 'pass-through' : 'chain-step', passOn };
 }
+
+const VALUE_STORE_INPUTS = /^(setvalue|setvaluenofire|setcomparevalue|setvaluecompare)$/i;
 
 /**
  * The relays / cases / counters a filter hands the use on to, when that is all it does: every
@@ -721,6 +737,12 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     // a counter that only locks or kills things when it runs out is the item's use count
     if (role === 'chain-step' && !(isCounter(x) && c.fedVia)) {
       skipped.push(`${label(x)} (${x.classname}, only arms or disarms other logic: a step of a key combo, not an ability)`);
+      continue;
+    }
+    // a switch without a cooldown of its own (minas TNT: the attack key flips whether the blast
+    // pushes, and a particle shows it) is not listed by GFL; one with a cooldown is (amdaporkeep)
+    if (role === 'switch' && !selfCd) {
+      skipped.push(`${label(x)} (${x.classname}, only flips values other logic reads and shows it: a mode switch, not an ability)`);
       continue;
     }
     if (role === 'pass-through' && !selfCd) {
