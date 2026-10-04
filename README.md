@@ -147,6 +147,11 @@ GFL 設定もこうした counter を持つアイテムの 40 件中 34 件が�
 「ボタンから撃たれている」に数えません。`OnBreak` しか撃たない physbox（当たり判定）、出力の無い filter（ナイフ除去用の部品）、
 他のロジックを Enable / Disable するだけの relay（キーコンボの段）、他の relay に `Trigger` するだけの relay（先の relay を代わりに判定）、
 strip を撃つ relay、ボタンから撃たれていない logic_timer は候補から外し、理由をメモに出します。
+タイマー（と自分が回す counter のループ）にしか撃たれないゲート（弾薬アイテムの `give_ammo`）、ヒント表示や音だけを返す 2 つ目のボタン
+（回復待ちの「ロック中」表示）も外します。テンプレート内で唯一のゲートを代わりにハンドラにするのは、ボタンや filter が何も選ばれず、
+そのゲートを何かが動かしているときだけです（`OnSpawn` で動く準備用の relay、武器から値をセットされるだけの branch は使いません。
+counter は使用回数なので、ボタンがあっても使います）。game_ui は、キーの出力がモデルの `FireUser1` などを経由して選んだ relay に
+届くときも、自分ではハンドラになりません。
 テンプレート生成の武器では、**テンプレートの外（default_ents など）にあって、マップや別のアイテムからも動かされる relay / counter / filter は
 ハンドラにしません**（ボスの HP counter、ステージやタイマーが動かす counter、別のアイテムも撃つボス用 relay）。テンプレートから数手で届くものを
 いったんアイテムのものとし、外から動かされるもの、そこから先のものを順に外します。値をセットするだけの入力（ステージがアイテムを止める
@@ -370,6 +375,11 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers (named
   `Attack` / `Attack2` … when there are several keys). Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
   count as "fed by a button", OnBreak-only physboxes, output-less filters, combo-step relays and strip relays are skipped.
+  So are gates only a timer drives (besides the counter they loop through: the ammo item's `give_ammo`) and a second
+  button that only answers the player (a "locked" hint). The template's lone gate stands in for the use only when no
+  button or filter was chosen and something sets it going (not a relay running `OnSpawn`, not a branch the weapon only
+  stores a value on; a lone counter is the use count either way), and a game_ui whose key reaches a chosen relay through
+  another entity (the model's `FireUser1`) is not a handler itself.
   For a templated weapon, logic outside its template lump that the map or another item drives too (a boss HP counter, a
   counter stages or timers move, a boss relay another item also fires) is not a handler: of what the lump sets going within
   a few hops, whatever an outside driver also sets going is dropped, then what dropped logic sets going. Value-storing

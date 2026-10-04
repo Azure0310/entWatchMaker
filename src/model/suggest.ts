@@ -394,6 +394,22 @@ function firesWithin(graph: EntityGraph, a: MapEntity, b: MapEntity, hops: numbe
   return false;
 }
 
+/** No other entity sets `x` going: it runs OnSpawn, or is only armed (SetValue) and enabled. */
+function setGoingByNothing(graph: EntityGraph, x: MapEntity): boolean {
+  return graph.incomingConnections(x).every(({ from, connection }) => from.id === x.id || isArmInput(connection.input));
+}
+
+/**
+ * The logic_timer that drives `x` when nothing else does, apart from what `x` itself sets going
+ * (the counter of a give-ammo loop: relay → counter Add, counter OutValue → relay).
+ */
+function clockDriven(graph: EntityGraph, x: MapEntity): MapEntity | null {
+  const drivers = graph.incomingConnections(x).filter(({ from, connection }) => from.id !== x.id && !isHousekeepingInput(connection.input));
+  const timer = drivers.find(({ from }) => from.classname === 'logic_timer')?.from;
+  if (!timer) return null;
+  return drivers.every(({ from }) => from.classname === 'logic_timer' || firesWithin(graph, x, from, 3)) ? timer : null;
+}
+
 /** Hops the item's own logic reaches from its template lump (button → filter → relay → counter). */
 const LUMP_REACH_HOPS = 4;
 
@@ -617,6 +633,16 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     if (isGameUi(x)) uis.push(c);
     else chosen.push({ c });
   }
+  // a second button that only answers the player (ze_forsaken_temple item_holy_lock: a "locked"
+  // hint while the item recharges) is not a use of the item
+  const buttons = chosen.filter(({ c }) => !feedbackOnly(graph, c.entity));
+  if (buttons.length > 0) {
+    for (const b of chosen.filter((o) => !buttons.includes(o))) {
+      chosen.splice(chosen.indexOf(b), 1);
+      included.delete(b.c.entity.id);
+      skipped.push(`${label(b.c.entity)} (${b.c.entity.classname}, only answers the player: not a use of the item)`);
+    }
+  }
   // touch triggers that start the chain count as feeders (they are confirmed as activation triggers below)
   const touchFeeders = byOrder.filter((c) => HOOKABLE_TRIGGERS.has(c.entity.classname) && c.entity.connections.some((k) => /^on(start)?touch|^ontrigger/i.test(k.output)));
   for (const c of touchFeeders) included.add(c.entity.id);
@@ -742,7 +768,18 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       skipped.push(`${label(x)} (logic_timer, a periodic effect rather than a use)`);
       continue;
     }
-    if (fed || selfCd || c.pickupEnabled || (c.tier <= 2 && gateCount === 1)) {
+    // a gate only a timer drives (besides the counter it loops through) is a periodic effect too:
+    // the ammo item's give_ammo relay hands out ammo on Timer_ammo, whatever its cooldown wiring
+    const clock = !fed && !c.key && !c.pickupEnabled ? clockDriven(graph, x) : null;
+    if (clock) {
+      skipped.push(`${label(x)} (${x.classname} driven by ${label(clock)} only: a periodic effect rather than a use)`);
+      continue;
+    }
+    // the lone gate of the template stands in for the use only when nothing else does, and not when
+    // nothing sets it going (a relay running OnSpawn, a branch the weapon only stores a value on);
+    // a lone counter is the item's use count either way (pharos: filter → maker FireUser1 → Add)
+    const loneGate = c.tier <= 2 && gateCount === 1 && (chosen.length === 0 || isCounter(x)) && !setGoingByNothing(graph, x);
+    if (fed || selfCd || c.pickupEnabled || loneGate) {
       included.add(x.id);
       chosen.push({
         c,
@@ -772,10 +809,11 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       }
     }
   }
-  // the game_ui itself reports the press only when nothing behind its keys qualified
+  // the game_ui itself reports the press only when nothing behind its keys qualified (a key may
+  // reach its relay through another entity: OnCase16 → model FireUser1, model OnUser1 → relay)
   for (const c of uis) {
     const ui = c.entity;
-    const behind = chosen.filter(({ c: o }) => o.key?.ui.id === ui.id || feeds(o.entity, (from) => from.id === ui.id));
+    const behind = chosen.filter(({ c: o }) => o.key?.ui.id === ui.id || feeds(o.entity, (from) => from.id === ui.id) || firesWithin(graph, ui, o.entity, 3));
     if (behind.length === 0) chosen.push({ c, extra: 'no relay behind its key outputs, so the ui reports the press itself' });
     else notes.push(`game_ui ${label(ui)}: ${behind.map(({ c: o }) => `${o.key?.key ?? 'output'} → ${label(o.entity)}`).join(', ')}`);
   }
