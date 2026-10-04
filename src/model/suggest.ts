@@ -371,6 +371,87 @@ function feedbackOnly(graph: EntityGraph, e: MapEntity): boolean {
   return effects.length > 0 && effects.every((c) => FEEDBACK_INPUTS.has(c.input.toLowerCase()) || graph.connectionTargets(e, c).every((t) => FEEDBACK_CLASSES.has(t.classname)));
 }
 
+/** `a` sets `b` going within `hops` steps of non-housekeeping inputs (UnpauseTimer, Trigger, Subtract, ...). */
+function firesWithin(graph: EntityGraph, a: MapEntity, b: MapEntity, hops: number): boolean {
+  let frontier = [a];
+  const seen = new Set([a.id]);
+  for (let d = 0; d < hops && frontier.length > 0; d++) {
+    const next: MapEntity[] = [];
+    for (const x of frontier) {
+      for (const c of x.connections) {
+        if (isHousekeepingInput(c.input)) continue;
+        for (const t of graph.connectionTargets(x, c)) {
+          if (t.id === b.id) return true;
+          if (!seen.has(t.id)) {
+            seen.add(t.id);
+            next.push(t);
+          }
+        }
+      }
+    }
+    frontier = next;
+  }
+  return false;
+}
+
+/** Hops the item's own logic reaches from its template lump (button → filter → relay → counter). */
+const LUMP_REACH_HOPS = 4;
+
+/**
+ * Logic outside a templated weapon's lump that something else drives too: a map entity (a stage
+ * relay, a timer, a boss's damage trigger) or another item's template. Of what the lump sets going
+ * within a few hops, whatever such a driver also sets going is dropped, then whatever dropped logic
+ * sets going, until nothing changes; the rest is the item's own (its filter or relay kept in
+ * default_ents, a counter its logic loops through). Inputs that only store a value (a stage turning
+ * the item off with SetValue) do not drive, nor do templates without a weapon (spawned parts of the
+ * item, like its minigame), nor logic nothing in the map fires (a pickup filter its spawned parts
+ * test: PvZ sun collecting); a timer fires by itself.
+ * Returns, for an entity outside any template, the driver that makes it shared (undefined when it
+ * is the item's own); null for a weapon placed in the map.
+ */
+function sharedLogic(graph: EntityGraph, e: MapEntity): ((t: MapEntity) => MapEntity | undefined) | null {
+  if (!e.source.templated) return null;
+  const lumpKey = (x: MapEntity) => `${x.source.file}|${x.source.container}`;
+  const home = lumpKey(e);
+  const lump = graph.entities.filter((x) => x.source.templated && lumpKey(x) === home);
+  const weaponLumps = new Set(graph.entities.filter((x) => x.source.templated && x.classname.startsWith('weapon_')).map(lumpKey));
+  const foreign = (s: MapEntity) => !s.source.templated || (weaponLumps.has(lumpKey(s)) && lumpKey(s) !== home);
+  const drives = (s: MapEntity) => s.classname === 'logic_timer' || !(isFilter(s) || isGate(s) || isCounter(s)) || graph.incomingConnections(s).length > 0;
+  const own = new Set(lump.map((x) => x.id));
+  let frontier = lump;
+  for (let d = 0; d < LUMP_REACH_HOPS && frontier.length > 0; d++) {
+    const next: MapEntity[] = [];
+    for (const x of frontier) {
+      for (const c of x.connections) {
+        if (isHousekeepingInput(c.input)) continue;
+        for (const t of graph.connectionTargets(x, c)) {
+          if (own.has(t.id)) continue;
+          own.add(t.id);
+          next.push(t);
+        }
+      }
+    }
+    frontier = next;
+  }
+  const driverOf = (t: MapEntity) =>
+    graph.incomingConnections(t).find(({ from, connection }) => from.id !== t.id && !own.has(from.id) && foreign(from) && drives(from) && !isArmInput(connection.input))?.from;
+  const sharedBy = new Map<number, MapEntity>();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const id of own) {
+      const x = graph.byId.get(id);
+      if (!x || lumpKey(x) === home) continue;
+      const by = driverOf(x);
+      if (by) {
+        own.delete(id);
+        sharedBy.set(id, by);
+        changed = true;
+      }
+    }
+  }
+  return (t) => (t.source.templated || own.has(t.id) ? undefined : (sharedBy.get(t.id) ?? driverOf(t)));
+}
+
 /**
  * Builds an item entry for a weapon entity and proposes handlers from related entities.
  *
@@ -499,12 +580,15 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   }
 
   // ---- selection -----------------------------------------------------------------------------
-  // CS2Fixes matches the handlers of a templated weapon by template suffix, so an entity outside
-  // the item's template lump (a boss relay the item also fires, a stage counter) would need
-  // "templated": false; the GFL configs write that for 2 handlers in 2656. Such logic is the
-  // map's, not the item's.
-  const inTemplate = (t: MapEntity) => !e.source.templated || t.source.templated;
-  const OUTSIDE_NOTE = 'outside the item\'s template lump: shared map logic the item fires, not its handler (CS2Fixes would need "templated": false; the GFL configs do that for 2 handlers in 2656)';
+  // Logic outside a templated weapon's lump that something else drives too (a boss HP counter, a
+  // stage counter, a relay the map's timers or another item fire) is the map's: the item only feeds
+  // it. Outside entities only the item drives (its filter or relay kept in default_ents) stay its
+  // handlers: the GFL configs list them, and CS2Fixes registers a handler whose entity has no
+  // template suffix 0.5 s after the weapon spawns, so they need no "templated": false.
+  const sharedVia = sharedLogic(graph, e) ?? (() => undefined);
+  const itemsOwn = (t: MapEntity) => !sharedVia(t);
+  const sharedNote = (t: MapEntity) =>
+    `outside the item's template lump and also set going by ${label(sharedVia(t)!)}: map logic the item feeds, not its handler`;
   const included = new Set<number>();
   /** `x` is fed (through a non-housekeeping input, a key reference or parenting) by an included entity matching `pred`. */
   const feeds = (x: MapEntity, pred: (from: MapEntity) => boolean) =>
@@ -544,15 +628,15 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       skipped.push(`${label(x)} (filter with no outputs; it is part of the knife-removal wiring, not a handler)`);
       continue;
     }
-    if (!inTemplate(x)) {
-      skipped.push(`${label(x)} (filter ${OUTSIDE_NOTE})`);
+    if (!itemsOwn(x)) {
+      skipped.push(`${label(x)} (filter ${sharedNote(x)})`);
       continue;
     }
     if (c.tier === 1 || fedByIncluded(x)) {
       // a filter that only checks the user and hands the use on to relays / counters is not the
-      // ability: the gates behind it are (GFL lists those, e.g. button → filter → relay). Gates
-      // outside the item's template do not count; a filter handing on only to those reports the use itself.
-      const passOn = filterPassOn(graph, x)?.filter(inTemplate);
+      // ability: the gates behind it are (GFL lists those, e.g. button → filter → relay). Map logic
+      // the item only feeds does not count; a filter handing on only to such logic reports the use itself.
+      const passOn = filterPassOn(graph, x)?.filter(itemsOwn);
       if (passOn && passOn.length > 0) {
         skipped.push(`${label(x)} (filter only checks the user and hands the use on to ${passOn.map(label).join(', ')})`);
         for (const t of passOn) {
@@ -567,7 +651,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       }
       // a counter only this filter counts (uses / ammo of this item) reports the use better than
       // the filter: the GFL configs list the counter (21 of 27 such chains)
-      const counters = itemCounters(graph, x).filter(inTemplate);
+      const counters = itemCounters(graph, x).filter(itemsOwn);
       if (counters.length > 0) {
         skipped.push(`${label(x)} (filter counted by ${counters.map(label).join(', ')}, which reports the use)`);
         for (const t of counters) {
@@ -593,8 +677,8 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     const x = c.entity;
     if (!x.hammerId || included.has(x.id) || decided.has(x.id)) continue;
     decided.add(x.id);
-    if (!inTemplate(x)) {
-      skipped.push(`${label(x)} (${x.classname} ${OUTSIDE_NOTE})`);
+    if (!itemsOwn(x)) {
+      skipped.push(`${label(x)} (${x.classname} ${sharedNote(x)})`);
       continue;
     }
     const strip = stripsVia(graph, x, 1);
@@ -614,7 +698,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       const readOn = x.connections
         .filter((k) => /^ongetvalue$/i.test(k.output) && !isHousekeepingInput(k.input))
         .flatMap((k) => graph.connectionTargets(x, k))
-        .filter((t, i, all) => (isGate(t) || isFilter(t)) && inTemplate(t) && all.indexOf(t) === i);
+        .filter((t, i, all) => (isGate(t) || isFilter(t)) && itemsOwn(t) && all.indexOf(t) === i);
       if (readOn.length > 0) {
         skipped.push(`${label(x)} (math_counter holding an amount the use only checks; the use goes on through ${readOn.map(label).join(', ')})`);
         for (const t of readOn) {
@@ -639,7 +723,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       const ability = CHOICE_CLASSES.has(x.classname) ? passOn.filter((t) => startsCooldown(graph, t)) : [];
       const replies = ability.length > 0 ? passOn.filter((t) => !ability.includes(t) && feedbackOnly(graph, t)) : [];
       const next = passOn.filter((t) => !replies.includes(t));
-      const nextIn = next.filter(inTemplate);
+      const nextIn = next.filter(itemsOwn);
       if (nextIn.length > 0 || next.length === 0) {
         skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${nextIn.map(label).join(', ')}${replies.length > 0 ? `; ${replies.map(label).join(', ')} only answers "not ready"` : ''})`);
         for (const t of nextIn) {
@@ -650,9 +734,9 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
         }
         continue;
       }
-      // it only hands the use on to logic outside the item's template (a boss relay): it is the
-      // last entity of the item's own, so it reports the use
-      notes.push(`${label(x)} hands the use on only to logic outside the item's template (${next.map(label).join(', ')}), so it reports the use itself`);
+      // it only hands the use on to map logic the item feeds (a boss relay): it is the last entity
+      // of the item's own, so it reports the use
+      notes.push(`${label(x)} hands the use on only to map logic the item feeds (${next.map(label).join(', ')}), so it reports the use itself`);
     }
     if (x.classname === 'logic_timer' && !fed) {
       skipped.push(`${label(x)} (logic_timer, a periodic effect rather than a use)`);
@@ -694,6 +778,45 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     const behind = chosen.filter(({ c: o }) => o.key?.ui.id === ui.id || feeds(o.entity, (from) => from.id === ui.id));
     if (behind.length === 0) chosen.push({ c, extra: 'no relay behind its key outputs, so the ui reports the press itself' });
     else notes.push(`game_ui ${label(ui)}: ${behind.map(({ c: o }) => `${o.key?.key ?? 'output'} → ${label(o.entity)}`).join(', ')}`);
+  }
+  // The item's charges / fuel / recast: a counter that locks or disables the button when it runs out
+  // and is not a plain use count (a timer refills or drains it). It shows the item on the HUD
+  // (mode 5) in place of the relays / branches the press sets off, and as CS2Fixes prints nothing
+  // for such a counter, the button reports the press (GFL: "button + counter" for 34 of the 40 items
+  // with such a counter).
+  const announcing = new Set<number>();
+  /** Gates the counter replaces: no handlers, but still part of the item's logic (its ability teleports). */
+  const replacedByGauge: MapEntity[] = [];
+  for (const { c: bc } of [...chosen]) {
+    const button = bc.entity;
+    if (!isUseEntity(button) || isGameUi(button)) continue;
+    const gauges = graph
+      .incomingConnections(button)
+      .filter(({ from, connection }) => isCounter(from) && /^(lock|disable)$/i.test(connection.input))
+      .map(({ from }) => from)
+      .filter((k, i, all) => all.indexOf(k) === i && !!k.hammerId && !counterUse(graph, k));
+    for (const counter of gauges) {
+      if (!chosen.some(({ c }) => c.entity.id === counter.id)) {
+        consider(counter, `locks ${label(button)} when it runs out`, 3);
+        const nc = byId.get(counter.id);
+        if (!nc) continue;
+        chosen.push({ c: nc, extra: 'the charges / fuel / recast the item shows on the HUD' });
+        included.add(counter.id);
+        for (let i = skipped.length - 1; i >= 0; i--) if (skipped[i].startsWith(`${label(counter)} (`)) skipped.splice(i, 1);
+      }
+      for (let i = chosen.length - 1; i >= 0; i--) {
+        const x = chosen[i].c.entity;
+        if (x.id === counter.id || isUseEntity(x) || isCounter(x)) continue;
+        if (firesWithin(graph, button, x, 4)) {
+          skipped.push(`${label(x)} (${x.classname}, set off by ${label(button)}, which reports the press while ${label(counter)} shows the item on the HUD)`);
+          chosen.splice(i, 1);
+          included.delete(x.id);
+          replacedByGauge.push(x);
+        }
+      }
+      announcing.add(button.id);
+      notes.push(`${label(button)} reports the press: ${label(counter)} shows the item on the HUD, and CS2Fixes prints no use for a counter shown as a value`);
+    }
   }
   const keysPerUi = new Map<number, Set<string>>();
   for (const { c } of chosen) {
@@ -746,7 +869,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   }
   if (isKnife(e)) {
     if (selection.length === 0) notes.push('knife item: no strip zone tied to it, teleport landing (within 64 units) or template spawner for it was found');
-    const ability = abilityReach(graph, chosen.map(({ c }) => c.entity), e);
+    const ability = abilityReach(graph, [...chosen.map(({ c }) => c.entity), ...replacedByGauge], e);
     for (const st of selection) {
       if (!st.trigger.hammerId || triggers.includes(st.trigger.hammerId)) continue;
       if (st.kind === 'landing' && switchedOnBy(graph, st.trigger, ability)) {
@@ -764,19 +887,27 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   // +use (the GFL convention: {"type": "button", "hammerid": "..."}); messages come from the follow-up.
   // A counter shown as a value announces nothing, so then the button keeps reporting the press.
   const hasFollowUp = item.handlers.some((h) => h.type !== 'button' && h.message !== false);
-  if (item.handlers.some((h) => h.type === 'button') && !hasFollowUp && item.handlers.some((h) => h.type !== 'button')) {
+  const announcingIds = new Set([...announcing].map((id) => graph.byId.get(id)?.hammerId));
+  if (announcingIds.size === 0 && item.handlers.some((h) => h.type === 'button') && !hasFollowUp && item.handlers.some((h) => h.type !== 'button')) {
     notes.push('the handlers behind the button announce nothing (a counter shown as a value), so the button reports the press');
   }
-  if (hasFollowUp) {
-    for (const h of item.handlers) {
-      if (h.type !== 'button') continue;
-      h.mode = 1;
-      h.event = undefined;
-      h.message = false;
+  for (const h of item.handlers) {
+    if (h.type !== 'button') continue;
+    if (announcingIds.has(h.hammerid)) {
+      // the counter shows the item on the HUD; the button only reports the press
+      if (!((h.cooldown ?? 0) > 0)) h.mode = 1;
+      h.message = true;
       h.ui = false;
-      h.cooldown = 0;
       h.maxuses = 0;
+      continue;
     }
+    if (!hasFollowUp) continue;
+    h.mode = 1;
+    h.event = undefined;
+    h.message = false;
+    h.ui = false;
+    h.cooldown = 0;
+    h.maxuses = 0;
   }
   if (item.handlers.length === 0) {
     notes.push(candidates.length === 0

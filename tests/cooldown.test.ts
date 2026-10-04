@@ -160,3 +160,35 @@ describe('an amount the use only checks is not the handler', () => {
     expect(item.handlers[1]).toMatchObject({ event: 'OnTrigger', message: true });
   });
 });
+
+describe('charges / fuel shown on the HUD (a counter that locks the button when it runs out)', () => {
+  it('lists the ammo counter instead of the relay / branch, and lets the button report the press', () => {
+    const weapon = mk('weapon_glock', 'mine_weapon', '300');
+    const button = mk('func_button', 'mine_but', '301', { parentname: 'mine_weapon', wait: '1' }, [c('OnPressed', 'mine_filter', 'TestActivator')]);
+    const filter = mk('filter_activator_context', 'mine_filter', '302', {}, [c('OnPass', 'mine_relay', 'Trigger')]);
+    const relay = mk('logic_relay', 'mine_relay', '303', {}, [c('OnTrigger', 'mine_branch', 'Test')]);
+    const branch = mk('logic_branch', 'mine_branch', '304', { initialvalue: '0' }, [c('OnFalse', 'mine_maker', 'ForceSpawn'), c('OnFalse', 'mine_counter', 'Subtract', '1')]);
+    const maker = mk('env_entity_maker', 'mine_maker', '305');
+    const counter = mk('math_counter', 'mine_counter', '306', { min: '0', max: '6', startvalue: '6' }, [c('OnHitMin', 'mine_but', 'Lock'), c('OnChangedFromMin', 'mine_but', 'Unlock')]);
+    const regen = mk('logic_timer', 'mine_add', '307', { refiretime: '15' }, [c('OnTimer', 'mine_counter', 'Add', '1')]);
+    const { item } = suggestItemForWeapon(weapon, graphOf(weapon, button, filter, relay, branch, maker, counter, regen));
+    expect(item.handlers.map((h) => h.hammerid)).toEqual(['301', '306']);
+    expect(item.handlers[0]).toMatchObject({ type: 'button', event: 'OnPressed', mode: 1, message: true, ui: false });
+    expect(item.handlers[1]).toMatchObject({ type: 'counterdown', mode: 5, ui: true });
+  });
+
+  it('finds a fuel counter only timers touch, and drops a relay the same press sets off', () => {
+    const weapon = mk('weapon_glock', 'flame_weapon', '310');
+    const button = mk('func_button', 'flame_but', '311', { parentname: 'flame_weapon', wait: '1' }, [c('OnPressed', 'flame_filter', 'TestActivator')]);
+    const filter = mk('filter_activator_context', 'flame_filter', '312', {}, [c('OnPass', 'flame_branch', 'Test'), c('OnPass', 'flame_fx_relay', 'Trigger')]);
+    const branch = mk('logic_branch', 'flame_branch', '313', { initialvalue: '1' }, [c('OnTrue', 'flame_burn', 'UnpauseTimer'), c('OnFalse', 'flame_burn', 'PauseTimer'), c('OnTrue', '!self', 'SetValue', '0'), c('OnFalse', '!self', 'SetValue', '1')]);
+    const fx = mk('logic_relay', 'flame_fx_relay', '314', {}, [c('OnTrigger', 'flame_particle', 'Start')]);
+    const particle = mk('info_particle_system', 'flame_particle', '315');
+    const burn = mk('logic_timer', 'flame_burn', '316', { refiretime: '1', startdisabled: '1' }, [c('OnTimer', 'flame_counter', 'Subtract', '1')]);
+    const refill = mk('logic_timer', 'flame_refill', '317', { refiretime: '15' }, [c('OnTimer', 'flame_counter', 'Add', '1')]);
+    const counter = mk('math_counter', 'flame_counter', '318', { min: '0', max: '12', startvalue: '12' }, [c('OnHitMin', 'flame_but', 'Disable'), c('OnChangedFromMin', 'flame_but', 'Enable')]);
+    const { item } = suggestItemForWeapon(weapon, graphOf(weapon, button, filter, branch, fx, particle, burn, refill, counter));
+    expect(item.handlers.map((h) => h.hammerid)).toEqual(['311', '318']);
+    expect(item.handlers[0]).toMatchObject({ mode: 1, message: true, ui: false });
+  });
+});

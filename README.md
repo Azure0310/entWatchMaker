@@ -136,6 +136,9 @@ filter / relay）が 1 ずつ `Add` / `Subtract` し、タイマーや自分自�
 評価したマップでは GFL の mode 3 / 4 の counter 58 件中 57 件、mode 5 の 22 件すべてと一致します。
 使用が値を読むだけの counter（`GetValue` → compare：太陽が足りるか）はハンドラにせず、その先の compare の結果のうち
 アイテムを Lock する / クールダウンを持つ方を、色や音を返すだけの「足りない」側より優先します。
+弾数・燃料・リキャストのように、使い切るとボタンを `Lock` / `Disable` し、タイマーで回復・消費する counter は、押下から続く
+relay / branch の代わりに mode 5 で HUD に出し、ボタン自身が押下を通知します（`OnPressed`、mode 1、HUD なし）。
+GFL 設定もこうした counter を持つアイテムの 40 件中 34 件が「ボタン + counter」です。
 
 **使用回数**: ハンドラ自身の出力が N 回しか発火しない（Hammer の Only once）ときは mode 3 / maxuses N にします。
 出力の無いボタンでも、アイテムのロジックが Lock / Unlock しているもの（ze_santassination_p）は +use のフックとして残します。
@@ -144,9 +147,12 @@ filter / relay）が 1 ずつ `Add` / `Subtract` し、タイマーや自分自�
 「ボタンから撃たれている」に数えません。`OnBreak` しか撃たない physbox（当たり判定）、出力の無い filter（ナイフ除去用の部品）、
 他のロジックを Enable / Disable するだけの relay（キーコンボの段）、他の relay に `Trigger` するだけの relay（先の relay を代わりに判定）、
 strip を撃つ relay、ボタンから撃たれていない logic_timer は候補から外し、理由をメモに出します。
-テンプレート生成の武器では、**テンプレートの外（default_ents など）にある relay / counter / filter もハンドラにしません**
-（アイテムの使用でついでに撃たれるボス用 relay やステージの counter）。CS2Fixes はテンプレート生成の武器のハンドラをテンプレート番号で
-突き合わせるので、外のエンティティには `"templated": false` が必要になりますが、GFL 設定 2656 ハンドラ中 2 件しかありません。
+テンプレート生成の武器では、**テンプレートの外（default_ents など）にあって、マップや別のアイテムからも動かされる relay / counter / filter は
+ハンドラにしません**（ボスの HP counter、ステージやタイマーが動かす counter、別のアイテムも撃つボス用 relay）。テンプレートから数手で届くものを
+いったんアイテムのものとし、外から動かされるもの、そこから先のものを順に外します。値をセットするだけの入力（ステージがアイテムを止める
+`SetValue`）、武器を含まないテンプレート（アイテムが出す部品）、何にも撃たれていないロジック（アイテムが出す拾い物の filter）は
+「外から」に数えません。アイテムだけが動かす default_ents の filter / relay はハンドラのままです。GFL 設定はこれを載せていて、
+CS2Fixes もテンプレート番号の付かないエンティティは武器の出現 0.5 秒後に登録するので、`"templated": false` は要りません。
 テンプレート内の relay が外のロジックに渡すだけのときは、その relay 自身がハンドラになります。
 
 **テンプレート（point_template）**: `NNN#entityLumpName` という lump は point_template #NNN の子で、中の `origin` は
@@ -276,10 +282,11 @@ npm run evaluate -- <CS2-ZE-Configs/entwatch> "C:\Program Files (x86)\Steam\stea
 report.md 先頭の「ゲーム内で設定と同じ動きをするアイテム」は、CS2Fixes での動作で比べた指標です。ボタン単独で数えるか、
 ボタンのフック + 後段のフィルタ / リレーで数えるかといった書き方だけの違いは同じとみなし、次を確かめます:
 GFL がフックするボタンをフックしているか（CS2Fixes は button ハンドラで持ち主以外の +use を止めます）、GFL の各ハンドラに
-同じ使用で発火する相手があり余分なハンドラが無いか、チャット通知 / HUD 表示が同じか（mode 5 の counter は通知しません）、
+同じ使用で発火する相手があり余分なハンドラが無いか、チャット通知が同じか（mode 5 の counter は通知しません）、
+アイテムが HUD に出るか（CS2Fixes は ui のどれかが有効なら 1 行出します。GFL の `"counter"`（mode 6）は counter の表示として比べます）、
 cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers（CS2Fixes と同じくマップ全体で比べます）。
 「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
-良くなったか確かめてください（2026-09 時点で、ゲーム内で同じ動き 65%、完全一致 50%）。
+良くなったか確かめてください（2026-10 時点で、ゲーム内で同じ動き 66%、完全一致 50%）。
 
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
@@ -361,8 +368,13 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers (named
   `Attack` / `Attack2` … when there are several keys). Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
   count as "fed by a button", OnBreak-only physboxes, output-less filters, combo-step relays and strip relays are skipped.
-  For a templated weapon, logic outside its template lump (a boss relay the item also fires, a stage counter) is never a
-  handler: CS2Fixes would need `"templated": false` on it, which the GFL configs write for 2 handlers in 2656.
+  For a templated weapon, logic outside its template lump that the map or another item drives too (a boss HP counter, a
+  counter stages or timers move, a boss relay another item also fires) is not a handler: of what the lump sets going within
+  a few hops, whatever an outside driver also sets going is dropped, then what dropped logic sets going. Value-storing
+  inputs (a stage switching the item off with `SetValue`), templates without a weapon (parts the item spawns) and logic
+  nothing fires (a pickup filter the item's spawned parts test) do not count as outside drivers. A filter or relay in
+  default_ents that only the item drives stays a handler: the GFL configs list it, and CS2Fixes registers an entity with no
+  template suffix 0.5 s after the weapon spawns, so it needs no `"templated": false`.
   Entities in `NNN#entityLumpName` lumps get world positions (env_entity_maker or point_template origin + local origin) and
   the `[PR#]` / `&0000` name decorations are ignored when resolving names. Knife items get `triggers` from the trigger that
   ForceSpawns their template (unless it spawns other items too or moves the stage on: opens doors, switches teleports,
@@ -386,7 +398,10 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   and frees it N seconds later. Everything else (a charge a timer refills, a gauge stepped by 30, a combo meter) stays
   mode 5 with message false. On the evaluated maps this matches 57 of the 58 counters GFL writes in mode 3 / 4 and all 22
   in mode 5. A counter the use only reads (`GetValue` → compare: enough sun?) is not the handler; of the compare's
-  outcomes the one that locks the item / has a cooldown wins over a colour-and-sound "not ready" reply.
+  outcomes the one that locks the item / has a cooldown wins over a colour-and-sound "not ready" reply. Ammo, fuel or a
+  recast that locks / disables the button when it runs out and is refilled or drained by a timer is shown on the HUD
+  (mode 5) in place of the relays / branches the press sets off, and the button reports the press (`OnPressed`,
+  mode 1, no HUD) — "button + counter" is what GFL writes for 34 of the 40 items with such a counter.
 - Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
   that is not a skybox and has the most entity data, not the biggest file.
 - Accuracy: `npm run evaluate -- <CS2-ZE-Configs/entwatch> <workshop/content/730 or map folders> --out eval` compares
@@ -394,9 +409,11 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   metric is whether an item would behave like the config in CS2Fixes: per-author style is accepted (counting the button
   itself vs. a plain button hook plus the filter / relay behind it), and it checks that the buttons GFL hooks are hooked
   (CS2Fixes blocks other players' +use on them), every GFL handler has a counterpart firing on the same use and there
-  are no extra ones, uses are announced / shown alike (a counter in mode 5 never announces), the cooldown is within 1 s
-  (2 s or less counts as none), the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Sept 2026: 65% behave the same in game, 50% are
-  identical; "What differs in game" lists the rest by kind. GFL's `"type": "counter"` / `"mode": 6` are not supported.
+  are no extra ones, uses are announced alike (a counter in mode 5 never announces), the item is on the HUD when GFL
+  puts it there (CS2Fixes shows one line per item; GFL's `"type": "counter"` / `"mode": 6`, which CS2Fixes does not
+  know, is compared as the counter display it is meant to be), the cooldown is within 1 s (2 s or less counts as none),
+  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026: 66% behave the same in game,
+  50% are identical; "What differs in game" lists the rest by kind.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.
