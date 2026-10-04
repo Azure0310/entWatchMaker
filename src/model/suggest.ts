@@ -221,7 +221,7 @@ const WEAPON_WORDS = new Set([
   'weapon', 'item', 'materia', 'pickup', 'knife', 'p90', 'ak47', 'm4a1', 'deagle', 'elite', 'glock', 'usp', 'nova', 'xm1014',
   'mag7', 'sawedoff', 'negev', 'm249', 'awp', 'ssg08', 'scar20', 'g3sg1', 'mp5sd', 'mp7', 'mp9', 'mac10', 'ump45', 'bizon',
   'tec9', 'cz75a', 'fiveseven', 'p250', 'hkp2000', 'revolver', 'famas', 'galilar', 'aug', 'sg556', 'm4a1_silencer', 'usp_silencer',
-  'taser', 'healthshot', 'decoy', 'flashbang', 'hegrenade', 'smokegrenade', 'molotov', 'incgrenade', 'ent', 'entity', 'wep', 'gun',
+  'taser', 'healthshot', 'decoy', 'flashbang', 'hegrenade', 'smokegrenade', 'molotov', 'incgrenade', 'ent', 'entity', 'wep', 'wpn', 'gun',
 ]);
 
 /** "materia_fire_weapon" -> "Materia Fire" */
@@ -522,6 +522,12 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   }
 
   // ---- selection -----------------------------------------------------------------------------
+  // CS2Fixes matches the handlers of a templated weapon by template suffix, so an entity outside
+  // the item's template lump (a boss relay the item also fires, a stage counter) would need
+  // "templated": false; the GFL configs write that for 2 handlers in 2656. Such logic is the
+  // map's, not the item's.
+  const inTemplate = (t: MapEntity) => !e.source.templated || t.source.templated;
+  const OUTSIDE_NOTE = 'outside the item\'s template lump: shared map logic the item fires, not its handler (CS2Fixes would need "templated": false; the GFL configs do that for 2 handlers in 2656)';
   const included = new Set<number>();
   /** `x` is fed (through a non-housekeeping input, a key reference or parenting) by an included entity matching `pred`. */
   const feeds = (x: MapEntity, pred: (from: MapEntity) => boolean) =>
@@ -561,11 +567,16 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       skipped.push(`${label(x)} (filter with no outputs; it is part of the knife-removal wiring, not a handler)`);
       continue;
     }
+    if (!inTemplate(x)) {
+      skipped.push(`${label(x)} (filter ${OUTSIDE_NOTE})`);
+      continue;
+    }
     if (c.tier === 1 || fedByIncluded(x)) {
       // a filter that only checks the user and hands the use on to relays / counters is not the
-      // ability: the gates behind it are (GFL lists those, e.g. button → filter → relay)
-      const passOn = filterPassOn(graph, x);
-      if (passOn) {
+      // ability: the gates behind it are (GFL lists those, e.g. button → filter → relay). Gates
+      // outside the item's template do not count; a filter handing on only to those reports the use itself.
+      const passOn = filterPassOn(graph, x)?.filter(inTemplate);
+      if (passOn && passOn.length > 0) {
         skipped.push(`${label(x)} (filter only checks the user and hands the use on to ${passOn.map(label).join(', ')})`);
         for (const t of passOn) {
           consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: true });
@@ -579,7 +590,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       }
       // a counter only this filter counts (uses / ammo of this item) reports the use better than
       // the filter: the GFL configs list the counter (21 of 27 such chains)
-      const counters = itemCounters(graph, x);
+      const counters = itemCounters(graph, x).filter(inTemplate);
       if (counters.length > 0) {
         skipped.push(`${label(x)} (filter counted by ${counters.map(label).join(', ')}, which reports the use)`);
         for (const t of counters) {
@@ -605,6 +616,10 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
     const x = c.entity;
     if (!x.hammerId || included.has(x.id) || decided.has(x.id)) continue;
     decided.add(x.id);
+    if (!inTemplate(x)) {
+      skipped.push(`${label(x)} (${x.classname} ${OUTSIDE_NOTE})`);
+      continue;
+    }
     const strip = stripsVia(graph, x, 1);
     if (strip) {
       skipped.push(`${label(x)} (${x.classname}, strips the player: selection wiring rather than an ability; ${strip.via})`);
@@ -622,7 +637,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       const readOn = x.connections
         .filter((k) => /^ongetvalue$/i.test(k.output) && !isHousekeepingInput(k.input))
         .flatMap((k) => graph.connectionTargets(x, k))
-        .filter((t, i, all) => (isGate(t) || isFilter(t)) && all.indexOf(t) === i);
+        .filter((t, i, all) => (isGate(t) || isFilter(t)) && inTemplate(t) && all.indexOf(t) === i);
       if (readOn.length > 0) {
         skipped.push(`${label(x)} (math_counter holding an amount the use only checks; the use goes on through ${readOn.map(label).join(', ')})`);
         for (const t of readOn) {
@@ -647,14 +662,20 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       const ability = CHOICE_CLASSES.has(x.classname) ? passOn.filter((t) => startsCooldown(graph, t)) : [];
       const replies = ability.length > 0 ? passOn.filter((t) => !ability.includes(t) && feedbackOnly(graph, t)) : [];
       const next = passOn.filter((t) => !replies.includes(t));
-      skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${next.map(label).join(', ')}${replies.length > 0 ? `; ${replies.map(label).join(', ')} only answers "not ready"` : ''})`);
-      for (const t of next) {
-        if (byId.has(t.id)) continue;
-        consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: fed || undefined });
-        const nc = byId.get(t.id);
-        if (nc) gateQueue.push(nc);
+      const nextIn = next.filter(inTemplate);
+      if (nextIn.length > 0 || next.length === 0) {
+        skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${nextIn.map(label).join(', ')}${replies.length > 0 ? `; ${replies.map(label).join(', ')} only answers "not ready"` : ''})`);
+        for (const t of nextIn) {
+          if (byId.has(t.id)) continue;
+          consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: fed || undefined });
+          const nc = byId.get(t.id);
+          if (nc) gateQueue.push(nc);
+        }
+        continue;
       }
-      continue;
+      // it only hands the use on to logic outside the item's template (a boss relay): it is the
+      // last entity of the item's own, so it reports the use
+      notes.push(`${label(x)} hands the use on only to logic outside the item's template (${next.map(label).join(', ')}), so it reports the use itself`);
     }
     if (x.classname === 'logic_timer' && !fed) {
       skipped.push(`${label(x)} (logic_timer, a periodic effect rather than a use)`);

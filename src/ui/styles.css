@@ -213,3 +213,58 @@ table.io td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-a
 .io-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .io-controls .input { flex: 1 1 260px; }
 .io-hint { padding: 4px 10px; border-bottom: 1px solid var(--line); }
+
+/* ---- Stripper mode ---- */
+.mode-switch { margin-left: 8px; }
+.mode-switch button { padding: 5px 14px; font-weight: 600; }
+.mode-switch button.on { background: var(--accent2); color: #fff; }
+.row-line { display: flex; align-items: baseline; gap: 10px; }
+.st-card { border-bottom: 1px solid var(--line); }
+.st-card.selected { background: #151a22; box-shadow: inset 3px 0 0 var(--accent); }
+.st-card-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; }
+.st-card-head:hover { background: var(--bg3); }
+.st-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.st-card-actions { display: inline-flex; gap: 2px; opacity: 0.55; }
+.st-card-head:hover .st-card-actions, .st-card.selected .st-card-actions { opacity: 1; }
+.st-issues { margin: 0 10px 6px; }
+.kind-badge { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 8px; border: 1px solid var(--line); white-space: nowrap; }
+.kind-badge.k-filter { color: var(--err); border-color: var(--err); }
+.kind-badge.k-add { color: var(--ok); border-color: var(--ok); }
+.kind-badge.k-modify { color: var(--warn); border-color: var(--warn); }
+.cnt { font-size: 11px; border-radius: 8px; padding: 0 7px; border: 1px solid var(--line); white-space: nowrap; }
+.cnt.ok { color: var(--ok); border-color: var(--ok); }
+.cnt.many { color: var(--accent); border-color: var(--accent); }
+.cnt.none { color: var(--warn); border-color: var(--warn); }
+.st-body { padding: 4px 10px 12px; }
+.st-sec { margin-top: 10px; }
+.st-sec h5 { margin: 0 0 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.match-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.mini.pick { border-color: var(--line); color: var(--fg); padding: 0 8px; }
+.mini.pick:hover { border-color: var(--accent); }
+.mini.add { color: var(--accent); }
+.kv-editor, .io-editor { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.kv-row { display: grid; grid-template-columns: minmax(90px, 0.8fr) 1.4fr 22px 20px; gap: 4px; width: 100%; align-items: center; }
+.rx { font-family: var(--mono); font-size: 11px; color: var(--line); text-align: center; }
+.rx.on { color: var(--tpl); font-weight: 700; }
+.io-row { display: grid; grid-template-columns: 1.1fr 1.1fr 0.9fr 0.8fr 52px 44px 20px; gap: 4px; width: 100%; align-items: center; }
+.io-row.typed { grid-template-columns: 1.1fr 1.1fr 0.9fr 0.8fr 52px 44px minmax(70px, 0.7fr) 20px; }
+.io-row .input { padding: 3px 6px; font-size: 12px; min-width: 0; }
+.io-row .num { padding-right: 2px; }
+.file-tabs { padding: 6px 10px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.badge.touched-filter { color: var(--err); border-color: var(--err); }
+.badge.touched-modify { color: var(--warn); border-color: var(--warn); }
+.hit-list { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.chip.hit-filter .chip-class { color: var(--err); }
+.chip.hit-modify .chip-class { color: var(--warn); }
+.prop-cell { display: flex; align-items: center; gap: 6px; }
+.prop-value { flex: 1; min-width: 0; word-break: break-all; }
+.row-actions { display: inline-flex; gap: 2px; flex-shrink: 0; opacity: 0.4; }
+tr:hover .row-actions, .row-actions:focus-within { opacity: 1; }
+tr.out-deleted td { text-decoration: line-through; opacity: 0.55; }
+tr.out-deleted td:last-child { text-decoration: none; opacity: 1; }
+table.editable .add-prop th, table.editable .add-prop td { padding-top: 8px; }
+table.editable .add-prop .input { padding: 3px 6px; }
+.diff-new { color: var(--ok); }
+.diff-del { color: var(--err); }
+.io-diff { list-style: none; margin: 8px 10px; padding: 0; font-size: 12px; }
+.after-view { padding-bottom: 8px; }

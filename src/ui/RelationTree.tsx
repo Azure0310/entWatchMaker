@@ -5,6 +5,7 @@ import { addHandler, addTrigger, selectEntity, setTreeDepth, setTreeRoot } from 
 import { useAppState } from './store';
 import { useT } from './useT';
 import { IoSearch } from './IoSearch';
+import { removeEntity } from './stripperActions';
 
 const KIND_ICON: Record<RelationKind, string> = {
   output: '→',
@@ -19,6 +20,8 @@ const KIND_ICON: Record<RelationKind, string> = {
 
 function Node({ node, usedIds, selectedId, itemUid }: { node: TreeNode; usedIds: Set<string>; selectedId: number | null; itemUid: string | null }) {
   const t = useT();
+  const { mode, stripperSim } = useAppState();
+  const touched = mode === 'stripper' ? stripperSim?.touched.get(node.entity.id) : undefined;
   const [open, setOpen] = useState(true);
   const e = node.entity;
   const name = friendlyName(e.targetname);
@@ -41,6 +44,7 @@ function Node({ node, usedIds, selectedId, itemUid }: { node: TreeNode; usedIds:
           <span className="ent-id">#{e.hammerId}</span>
           {e.source.templated && <span className="badge tpl">T</span>}
           {usedIds.has(e.hammerId) && <span className="badge ok">✓</span>}
+          {touched && <span className={`badge touched-${touched}`}>{touched === 'filter' ? '✂' : '✎'}</span>}
           {node.repeated && <span className="muted small"> {t('tree.repeated')}</span>}
         </span>
         <span className="tree-actions">
@@ -49,7 +53,12 @@ function Node({ node, usedIds, selectedId, itemUid }: { node: TreeNode; usedIds:
               ⌂
             </button>
           )}
-          {itemUid && e.hammerId && (
+          {mode === 'stripper' && (
+            <button type="button" className="mini danger" title={t('st.insp.remove')} onClick={() => removeEntity(e)}>
+              ✂
+            </button>
+          )}
+          {mode !== 'stripper' && itemUid && e.hammerId && (
             <button
               type="button"
               className="mini"
