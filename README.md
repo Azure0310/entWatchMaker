@@ -270,14 +270,16 @@ npm run diagnose -- <vpk か vmap かそのフォルダ> [entwatch/<map>.jsonc] 
 `diagnose` は推定に失敗したマップを調べるためのもので、「ツールの提案 vs 設定」「設定のハンドラ / トリガーがどのエンティティで、誰に撃たれ、何を撃つか」「武器の周囲 512 ユニットにあるもの」を出します。テンプレート内のエンティティは、ローカル座標に加えてワールド座標も表示します。
 
 ```bash
-# GFL の設定と照合して推定の精度を測る（Workshop フォルダを丸ごと指定できる）
-npm run evaluate -- <CS2-ZE-Configs/entwatch> "C:\Program Files (x86)\Steam\steamapps\workshop\content\730" --out eval
+# GFL の設定と照合して推定の精度を測る（Workshop フォルダを丸ごと、いくつでも指定できる）
+npm run evaluate -- <CS2-ZE-Configs/entwatch> "C:\Program Files (x86)\Steam\steamapps\workshop\content\730" --out eval [--prefer <ids.tsv>]
 ```
 
 `evaluate` は、読み込めたマップのうち同名の GFL 設定があるものについて、設定の各アイテムでツールの提案と
 ハンドラ / トリガーの hammerid、type / event / mode / cooldown / maxuses を突き合わせ、`eval/report.md`（全体とマップ別の一致率）、
 `eval/details.md`（一致しなかったアイテムごとの差分）、`eval/results.json` を書き出します。複数のマップを含むパッケージでは
-設定と同名のマップを使い、ローダー単体なら別のマップを読む場合はレポートに出します。
+設定と同名のマップを使い、ローダー単体なら別のマップを読む場合はレポートに出します。同じマップが複数のフォルダにあるとき
+（作者のアップロードと GFL コレクションのもの）は 1 つだけ評価します: `--prefer` のファイルに挙げた Workshop ID（GFL の
+Workshop コレクションの ID 一覧など。1 行 1 件、タブ区切りなら 1 列目）のフォルダ、なければ設定の hammerid が多く見つかるほうです。
 
 report.md 先頭の「ゲーム内で設定と同じ動きをするアイテム」は、CS2Fixes での動作で比べた指標です。ボタン単独で数えるか、
 ボタンのフック + 後段のフィルタ / リレーで数えるかといった書き方だけの違いは同じとみなし、次を確かめます:
@@ -286,7 +288,7 @@ GFL がフックするボタンをフックしているか（CS2Fixes は button
 アイテムが HUD に出るか（CS2Fixes は ui のどれかが有効なら 1 行出します。GFL の `"counter"`（mode 6）は counter の表示として比べます）、
 cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers（CS2Fixes と同じくマップ全体で比べます）。
 「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
-良くなったか確かめてください（2026-10 時点で、ゲーム内で同じ動き 66%、完全一致 50%）。
+良くなったか確かめてください（2026-10 時点の 181 マップで、ゲーム内で同じ動き 67%、完全一致 50%）。
 
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
@@ -405,15 +407,17 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
 - Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
   that is not a skybox and has the most entity data, not the biggest file.
 - Accuracy: `npm run evaluate -- <CS2-ZE-Configs/entwatch> <workshop/content/730 or map folders> --out eval` compares
-  the suggestions with the GFL configs of every map it can load (report.md, details.md, results.json). The headline
+  the suggestions with the GFL configs of every map it can load (report.md, details.md, results.json); a map found in
+  several folders is evaluated once, from the upload listed in `--prefer ids.tsv` or else where most config ids are
+  found. The headline
   metric is whether an item would behave like the config in CS2Fixes: per-author style is accepted (counting the button
   itself vs. a plain button hook plus the filter / relay behind it), and it checks that the buttons GFL hooks are hooked
   (CS2Fixes blocks other players' +use on them), every GFL handler has a counterpart firing on the same use and there
   are no extra ones, uses are announced alike (a counter in mode 5 never announces), the item is on the HUD when GFL
   puts it there (CS2Fixes shows one line per item; GFL's `"type": "counter"` / `"mode": 6`, which CS2Fixes does not
   know, is compared as the counter display it is meant to be), the cooldown is within 1 s (2 s or less counts as none),
-  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026: 66% behave the same in game,
-  50% are identical; "What differs in game" lists the rest by kind.
+  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026, 181 maps: 67% behave the same
+  in game, 50% are identical; "What differs in game" lists the rest by kind.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.

@@ -2,12 +2,14 @@
  * Runs the tool's suggestion for the weapons of every map it can load and compares the result
  * with the GFL EntWatch configs field by field.
  *
- *   npx tsx scripts/evaluate.ts <configs/entwatch dir> <map folder | workshop dir>... [--out dir]
+ *   npx tsx scripts/evaluate.ts <configs/entwatch dir> <map folder | workshop dir>... [--out dir] [--prefer ids.tsv]
  *
  * A folder without .vpk / .vmap files (e.g. steamapps/workshop/content/730) is expanded to its
  * sub folders. When a workshop package holds several maps, every map that has a config is
- * evaluated (the loader alone would only read the biggest one). Writes report.md, details.md and
- * results.json into --out (default: eval).
+ * evaluated (the loader alone would only read the biggest one). A map found in several folders
+ * (an author's upload and the GFL collection's) is evaluated once: from a folder named in
+ * --prefer (workshop ids, first column), else from the one where most config ids are found.
+ * Writes report.md, details.md and results.json into --out (default: eval).
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -23,14 +25,25 @@ import { isKnife } from '../src/model/triggers';
 import { isHousekeepingInput } from '../src/model/roles';
 
 const args = process.argv.slice(2);
-const outIndex = args.indexOf('--out');
-const outDir = outIndex >= 0 ? args[outIndex + 1] : 'eval';
-const positional = args.filter((a, i) => !a.startsWith('--') && (outIndex < 0 || i !== outIndex + 1));
+const flagValue = (flag: string) => (args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : undefined);
+const outDir = flagValue('--out') ?? 'eval';
+const preferFile = flagValue('--prefer');
+const flagValues = new Set(['--out', '--prefer'].map((f) => args.indexOf(f) + 1).filter((i) => i > 0));
+const positional = args.filter((a, i) => !a.startsWith('--') && !flagValues.has(i));
 const [configDir, ...targets] = positional;
 if (!configDir || targets.length === 0) {
-  console.error('usage: npx tsx scripts/evaluate.ts <configs/entwatch dir> <map folder | workshop dir>... [--out dir]');
+  console.error('usage: npx tsx scripts/evaluate.ts <configs/entwatch dir> <map folder | workshop dir>... [--out dir] [--prefer ids.tsv]');
   process.exit(2);
 }
+/** Workshop ids whose upload wins when a map is in several folders (e.g. the GFL collection). */
+const preferred = new Set(
+  preferFile
+    ? readFileSync(preferFile, 'utf8')
+        .split(/\r?\n/)
+        .map((l) => l.split('\t')[0].trim())
+        .filter(Boolean)
+    : [],
+);
 
 const configs = new Map<string, string>();
 for (const f of readdirSync(configDir)) if (f.toLowerCase().endsWith('.jsonc')) configs.set(f.slice(0, -6).toLowerCase(), path.join(configDir, f));
@@ -318,6 +331,7 @@ function evaluateItem(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig | nu
 const results: MapResult[] = [];
 const skipped: { folder: string; reason: string }[] = [];
 const details: string[] = [];
+const detailsOf = new Map<MapResult, string[]>();
 for (const folder of folders) {
   for (const candidate of await candidateMaps(folder)) {
     let map: ParsedMap;
@@ -330,6 +344,20 @@ for (const folder of folders) {
     evaluateMap(folder, map, candidate.loaderPick);
   }
 }
+// the same map in several folders: keep one
+const byMapName = new Map<string, MapResult[]>();
+for (const r of results) byMapName.set(r.mapName.toLowerCase(), [...(byMapName.get(r.mapName.toLowerCase()) ?? []), r]);
+for (const group of byMapName.values()) {
+  if (group.length < 2) continue;
+  const isPreferred = (r: MapResult) => preferred.has(path.basename(r.folder));
+  const keep = [...group].sort((a, b) => Number(isPreferred(b)) - Number(isPreferred(a)) || b.foundRatio - a.foundRatio)[0];
+  for (const r of group) {
+    if (r === keep) continue;
+    results.splice(results.indexOf(r), 1);
+    skipped.push({ folder: r.folder, reason: `${r.mapName} is evaluated from ${path.basename(keep.folder)}${isPreferred(keep) ? ' (preferred upload)' : ' (more config ids found)'}` });
+  }
+}
+for (const r of results) details.push(...detailsOf.get(r)!);
 
 function evaluateMap(folder: string, map: ParsedMap, loaderPick: string | undefined): void {
   if (map.stats.entities === 0) {
@@ -360,8 +388,11 @@ function evaluateMap(folder: string, map: ParsedMap, loaderPick: string | undefi
   const covered = new Set(config.items.map((it) => it.hammerid));
   const extraWeapons = map.entities.filter((e) => e.classname.startsWith('weapon_') && !covered.has(e.hammerId)).length;
   const otherPick = loaderPick && loaderPick.toLowerCase() !== map.mapName.toLowerCase() ? loaderPick : undefined;
-  results.push({ folder, mapName: map.mapName, config: path.basename(configPath), items, extraWeapons, foundRatio, loaderPick: otherPick });
+  const result: MapResult = { folder, mapName: map.mapName, config: path.basename(configPath), items, extraWeapons, foundRatio, loaderPick: otherPick };
+  results.push(result);
   console.error(`${map.mapName}: ${items.filter((i) => i.exact).length}/${items.length} exact`);
+  const details: string[] = [];
+  detailsOf.set(result, details);
 
   details.push(`## ${map.mapName} (${path.basename(folder)})`);
   for (const it of items) {
