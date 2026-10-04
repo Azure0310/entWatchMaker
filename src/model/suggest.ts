@@ -394,9 +394,16 @@ function firesWithin(graph: EntityGraph, a: MapEntity, b: MapEntity, hops: numbe
   return false;
 }
 
-/** No other entity sets `x` going: it runs OnSpawn, or is only armed (SetValue) and enabled. */
+/**
+ * `x` is set-up logic: no other entity sets it going and it either runs OnSpawn or is only armed
+ * (SetValue) by others. A gate with no inputs at all but other outputs is left alone: a script or
+ * an AddOutput fires it (ze_ffvii_cosmo_canyon_v5_p Item_Relay_Potion).
+ */
 function setGoingByNothing(graph: EntityGraph, x: MapEntity): boolean {
-  return graph.incomingConnections(x).every(({ from, connection }) => from.id === x.id || isArmInput(connection.input));
+  const inputs = graph.incomingConnections(x).filter(({ from }) => from.id !== x.id);
+  if (inputs.some(({ connection }) => !isArmInput(connection.input))) return false;
+  const effects = x.connections.filter((k) => !isHousekeepingInput(k.input));
+  return inputs.length > 0 || (effects.length > 0 && effects.every((k) => /^onspawn$/i.test(k.output)));
 }
 
 /**
@@ -643,6 +650,17 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       skipped.push(`${label(b.c.entity)} (${b.c.entity.classname}, only answers the player: not a use of the item)`);
     }
   }
+  // a physbox the player presses E on that only presses the item's button (ze_2049 human_cone_phys
+  // OnPlayerUse → human_cone_button Press): the button reports the use
+  for (const p of [...chosen]) {
+    const effects = p.c.entity.connections.filter((k) => !isHousekeepingInput(k.input));
+    const pressed = effects.flatMap((k) => (/^(press|pressin|use)$/i.test(k.input) ? graph.connectionTargets(p.c.entity, k) : [null]));
+    const button = pressed[0];
+    if (effects.length === 0 || !button || !pressed.every((t) => t && t.id === button.id) || !chosen.some(({ c }) => c.entity.id === button.id)) continue;
+    chosen.splice(chosen.indexOf(p), 1);
+    included.delete(p.c.entity.id);
+    skipped.push(`${label(p.c.entity)} (${p.c.entity.classname}, only presses ${label(button)}, which reports the use)`);
+  }
   // touch triggers that start the chain count as feeders (they are confirmed as activation triggers below)
   const touchFeeders = byOrder.filter((c) => HOOKABLE_TRIGGERS.has(c.entity.classname) && c.entity.connections.some((k) => /^on(start)?touch|^ontrigger/i.test(k.output)));
   for (const c of touchFeeders) included.add(c.entity.id);
@@ -854,6 +872,23 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       }
       announcing.add(button.id);
       notes.push(`${label(button)} reports the press: ${label(counter)} shows the item on the HUD, and CS2Fixes prints no use for a counter shown as a value`);
+    }
+  }
+  // Of several game_ui keys, GFL lists those with a cooldown or uses (48 of 64 such handlers on the
+  // evaluated maps) and rarely one with no cooldown wiring at all (0 of 10; it does list a 2 s
+  // double-press guard): such a key is a plain attack or a toggle beside the item's abilities. Its
+  // relay stays part of the item's logic (its ability teleports).
+  const keyed = chosen.filter(({ c }) => c.key);
+  const timed = (x: MapEntity) => {
+    const s = suggestHandler(x, graph);
+    return (s.cooldown ?? 0) > 2 || s.mode === 3 || s.mode === 4 || hasSelfCooldown(graph, x);
+  };
+  const untimedKeys = keyed.some(({ c }) => timed(c.entity)) ? keyed.filter(({ c }) => !timed(c.entity)) : [];
+  if (keyed.length >= 2) {
+    for (const k of untimedKeys) {
+      chosen.splice(chosen.indexOf(k), 1);
+      replacedByGauge.push(k.c.entity);
+      skipped.push(`${label(k.c.entity)} (${k.c.entity.classname} on ${k.c.key!.key}: no cooldown or uses, a plain attack or toggle beside the item's abilities)`);
     }
   }
   const keysPerUi = new Map<number, Set<string>>();

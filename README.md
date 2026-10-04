@@ -148,10 +148,12 @@ GFL 設定もこうした counter を持つアイテムの 40 件中 34 件が�
 他のロジックを Enable / Disable するだけの relay（キーコンボの段）、他の relay に `Trigger` するだけの relay（先の relay を代わりに判定）、
 strip を撃つ relay、ボタンから撃たれていない logic_timer は候補から外し、理由をメモに出します。
 タイマー（と自分が回す counter のループ）にしか撃たれないゲート（弾薬アイテムの `give_ammo`）、ヒント表示や音だけを返す 2 つ目のボタン
-（回復待ちの「ロック中」表示）も外します。テンプレート内で唯一のゲートを代わりにハンドラにするのは、ボタンや filter が何も選ばれず、
-そのゲートを何かが動かしているときだけです（`OnSpawn` で動く準備用の relay、武器から値をセットされるだけの branch は使いません。
-counter は使用回数なので、ボタンがあっても使います）。game_ui は、キーの出力がモデルの `FireUser1` などを経由して選んだ relay に
-届くときも、自分ではハンドラになりません。
+（回復待ちの「ロック中」表示）、ボタンを `Press` するだけの physbox（プレイヤーが E を押す当たり判定。押されたボタンが使用を報告します）も
+外します。テンプレート内で唯一のゲートを代わりにハンドラにするのは、ボタンや filter が何も選ばれなかったときだけです（`OnSpawn` だけで
+動く準備用の relay、武器から値をセットされるだけの branch は使いません。入力が何も無い relay はスクリプトや AddOutput から撃たれるので
+使います。counter は使用回数なので、ボタンがあっても使います）。game_ui は、キーの出力がモデルの `FireUser1` などを経由して
+選んだ relay に届くときも、自分ではハンドラになりません。キーが複数あるときは、クールダウンの配線も使用回数も無いキー
+（通常攻撃や切り替え）を外します。2 秒の連打防止でも配線があれば残します（GFL 設定は書いています）。
 テンプレート生成の武器では、**テンプレートの外（default_ents など）にあって、マップや別のアイテムからも動かされる relay / counter / filter は
 ハンドラにしません**（ボスの HP counter、ステージやタイマーが動かす counter、別のアイテムも撃つボス用 relay）。テンプレートから数手で届くものを
 いったんアイテムのものとし、外から動かされるもの、そこから先のものを順に外します。値をセットするだけの入力（ステージがアイテムを止める
@@ -293,7 +295,7 @@ GFL がフックするボタンをフックしているか（CS2Fixes は button
 アイテムが HUD に出るか（CS2Fixes は ui のどれかが有効なら 1 行出します。GFL の `"counter"`（mode 6）は counter の表示として比べます）、
 cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers（CS2Fixes と同じくマップ全体で比べます）。
 「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
-良くなったか確かめてください（2026-10 時点の 181 マップで、ゲーム内で同じ動き 67%、完全一致 50%）。
+良くなったか確かめてください（2026-10 時点の 181 マップで、ゲーム内で同じ動き 71%、完全一致 54%）。
 
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
@@ -375,11 +377,14 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   is found through the weapon's `OnPlayerPickup → Activate`; the relays behind each key become the handlers (named
   `Attack` / `Attack2` … when there are several keys). Housekeeping inputs (Kill / Disable / Enable / Deactivate …) never
   count as "fed by a button", OnBreak-only physboxes, output-less filters, combo-step relays and strip relays are skipped.
-  So are gates only a timer drives (besides the counter they loop through: the ammo item's `give_ammo`) and a second
-  button that only answers the player (a "locked" hint). The template's lone gate stands in for the use only when no
-  button or filter was chosen and something sets it going (not a relay running `OnSpawn`, not a branch the weapon only
-  stores a value on; a lone counter is the use count either way), and a game_ui whose key reaches a chosen relay through
-  another entity (the model's `FireUser1`) is not a handler itself.
+  So are gates only a timer drives (besides the counter they loop through: the ammo item's `give_ammo`), a second
+  button that only answers the player (a "locked" hint) and a physbox that only `Press`es the item's button (the button
+  reports the use). The template's lone gate stands in for the use only when no button or filter was chosen (not a relay
+  running only `OnSpawn`, not a branch the weapon only stores a value on; a relay with no inputs at all is fired by a
+  script or an AddOutput and still counts, and a lone counter is the use count either way), and a game_ui whose key
+  reaches a chosen relay through another entity (the model's `FireUser1`) is not a handler itself. Of several keys, those
+  with neither cooldown wiring nor uses (a plain attack, a toggle) are left out; a 2 s double-press guard still counts as
+  wiring (the GFL configs list such keys).
   For a templated weapon, logic outside its template lump that the map or another item drives too (a boss HP counter, a
   counter stages or timers move, a boss relay another item also fires) is not a handler: of what the lump sets going within
   a few hops, whatever an outside driver also sets going is dropped, then what dropped logic sets going. Value-storing
@@ -426,8 +431,8 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   are no extra ones, uses are announced alike (a counter in mode 5 never announces), the item is on the HUD when GFL
   puts it there (CS2Fixes shows one line per item; GFL's `"type": "counter"` / `"mode": 6`, which CS2Fixes does not
   know, is compared as the counter display it is meant to be), the cooldown is within 1 s (2 s or less counts as none),
-  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026, 181 maps: 67% behave the same
-  in game, 50% are identical; "What differs in game" lists the rest by kind.
+  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026, 181 maps: 71% behave the same
+  in game, 54% are identical; "What differs in game" lists the rest by kind.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.

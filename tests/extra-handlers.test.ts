@@ -108,6 +108,59 @@ describe('handlers GFL never lists', () => {
     expect(ids(item)).toEqual(['9122', '9127']);
   });
 
+  it('drops a key without cooldown beside a key with one', () => {
+    const { graph, byName } = graphWith((mk, c) => [
+      mk('point_template', 'dk_template', '300', { template01: 'dk_knife', template02: 'dk_ui', template03: 'dk_attack1', template04: 'dk_attack2' }),
+      mk('weapon_knife', 'dk_knife', '6440', { origin: '0 0 0' }, [c('OnPlayerPickup', 'dk_ui', 'Activate')]),
+      mk('logic_case', 'dk_ui', '6441', { vscripts: 'game_ui', case15: 'PressedAttack', case16: 'PressedAttack2' }, [
+        c('OnCase15', 'dk_attack1', 'Trigger'),
+        c('OnCase16', 'dk_attack2', 'Trigger'),
+      ]),
+      // a plain swing: no cooldown
+      mk('logic_relay', 'dk_attack1', '6442', {}, [c('OnTrigger', 'dk_swing_hurt', 'Enable'), c('OnTrigger', 'dk_swing_hurt', 'Disable', '', 0.5)]),
+      // the ability: 30 s cooldown
+      mk('logic_relay', 'dk_attack2', '6445', {}, [
+        c('OnTrigger', 'dk_wave', 'ForceSpawn'),
+        c('OnTrigger', '!self', 'Disable'),
+        c('OnTrigger', '!self', 'Enable', '', 30),
+      ]),
+      mk('trigger_hurt', 'dk_swing_hurt', '6443', { startdisabled: '1', parentname: 'dk_knife' }),
+      mk('env_entity_maker', 'dk_wave', '6444', { entitytemplate: 'dk_wave_template' }),
+    ]);
+    const { item, notes } = suggestItemForWeapon(byName('dk_knife'), graph);
+    expect(ids(item)).toEqual(['6445']);
+    expect(notes.some((n) => n.includes('dk_attack1') && n.includes('no cooldown or uses'))).toBe(true);
+  });
+
+  it('leaves out a physbox that only presses the item button', () => {
+    const { graph, byName } = graphWith((mk, c) => [
+      mk('point_template', 'cone_template', '300', { template01: 'cone_wpn', template02: 'cone_phys', template03: 'cone_button', template04: 'cone_filter' }),
+      mk('weapon_elite', 'cone_wpn', '4147', { origin: '0 0 0' }),
+      mk('func_physbox', 'cone_phys', '4148', { parentname: 'cone_wpn' }, [c('OnPlayerUse', 'cone_button', 'Press')]),
+      mk('func_button', 'cone_button', '16906', { parentname: 'cone_wpn', wait: '1' }, [c('OnPressed', 'cone_filter', 'TestActivator')]),
+      mk('filter_activator_name', 'cone_filter', '4143', { filtername: 'cone_user' }, [
+        c('OnPass', 'cone_button', 'Lock'),
+        c('OnPass', 'cone_button', 'Unlock', '', 45),
+        c('OnPass', 'cone_maker', 'ForceSpawn'),
+      ]),
+      mk('env_entity_maker', 'cone_maker', '4144', { entitytemplate: 'cone_prop_template' }),
+    ]);
+    const { item } = suggestItemForWeapon(byName('cone_wpn'), graph);
+    expect(ids(item)).toContain('16906');
+    expect(ids(item)).not.toContain('4148');
+  });
+
+  it('still takes a lone relay only a script fires', () => {
+    const { graph, byName } = graphWith((mk, c) => [
+      mk('point_template', 'potion_template', '300', { template01: 'potion_wpn', template02: 'potion_relay' }),
+      mk('weapon_healthshot', 'potion_wpn', '1040', { origin: '0 0 0' }),
+      mk('logic_relay', 'potion_relay', '1042', {}, [c('OnTrigger', 'potion_heal', 'Enable'), c('OnTrigger', 'potion_wpn', 'Kill', '', 1)]),
+      mk('trigger_hurt', 'potion_heal', '1043', { startdisabled: '1', damage: '-100' }),
+    ]);
+    const { item } = suggestItemForWeapon(byName('potion_wpn'), graph);
+    expect(ids(item)).toEqual(['1042']);
+  });
+
   it('still counts a lone counter the use reaches through a maker', () => {
     const { graph, byName } = graphWith((mk, c) => [
       mk('point_template', 'electric_template', '300', { template01: 'electric_knife', template02: 'electric_button', template03: 'electric_filter', template04: 'electric_maker', template05: 'electric_counter' }),
