@@ -106,7 +106,9 @@ English summary is at the bottom.
 **イベント推定**: エンティティが実際に発火している出力それぞれについて、その先の配線を 3 段まで追い、
 「遅延付きの `Unlock` / `Enable` に到達する（= クールダウン付きの能力本体）」出力を最優先、次に効果の数、
 最後に classname ごとの事前確率（filter → `OnPass`、button → `OnPressed`、relay → `OnTrigger` …）で順位付けします。
-自身を `Kill` / `Lock` するだけの出力は下位になります。ハンドラ編集欄の event 候補はこの順で並び、推定と違う値のときは根拠付きで提案が出ます。
+自身を `Kill` / `Lock` するだけの出力は下位になります。同点ならクールダウンにつながる出力を選びます。押下がスクリプトに確認を頼むだけ
+（`OnPressed → RunScriptInput CheckOwner`）で、自分の `OnUser1`〜`4` が Lock やクールダウンを持つときは、スクリプトがその出力で
+答えるので `OnUserN` を選びます（ze_genso_of_last_v4）。ハンドラ編集欄の event 候補はこの順で並び、推定と違う値のときは根拠付きで提案が出ます。
 
 **クールダウン推定**: 使用そのものが起こす配線だけを見ます。押下（とハンドラの event）から出力を遅延を足し合わせながら追い、
 通り道のゲート（ボタン / フィルタ / relay / branch …）が `Lock` → `Unlock`、`Disable` → `Enable`、
@@ -378,7 +380,9 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   adjust event / mode / cooldown → download the jsonc. Existing configs can be imported and edited.
 - Suggestions follow the conventions of the 211 GFL CS2 ZE configs (plain `button` hook + `OnPass`/`OnTrigger` handler,
   `type` omitted for event handlers, counters for `math_counter`); the event is the output whose chain reaches a delayed
-  `Unlock`/`Enable` (or a `SetValue 1` / delayed `SetValue 0` pair on a branch / compare / counter). The cooldown is read
+  `Unlock`/`Enable` (or a `SetValue 1` / delayed `SetValue 0` pair on a branch / compare / counter), winning ties too; a
+  press that only asks a script (`OnPressed → RunScriptInput CheckOwner`) gives way to the entity's own `OnUser1`–`4`
+  that locks it or starts its cooldown, which the script fires when it lets the use through. The cooldown is read
   from what the use itself sets off: the chain is followed from the press with the delays added up, and the cooldown is
   the time until the gates the use goes through (button, filter, relay, branch; those in front of the handler first) are
   open again. Re-enables from other wiring (a zombie silence, a boss relay) do not count, delays of 2 s or less are

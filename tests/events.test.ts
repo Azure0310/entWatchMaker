@@ -53,6 +53,34 @@ describe('event inference', () => {
     expect(suggestEvents(graph, bare)[0].event).toBe('OnPressed');
   });
 
+  // ze_genso_of_last_v4: the press asks filter_script whether the holder owns the item; the script
+  // answers by firing the button's OnUser4, which does the ability and locks the button
+  const scriptButton = (lockAgain: boolean) => {
+    const c = (output: string, target: string, input: string, param = '', delay = 0) => ({ output, target, targetType: 7, input, param, delay, timesToFire: -1 });
+    const mk = (id: number, classname: string, targetname: string, connections: MapEntity['connections']): MapEntity => ({
+      id, hammerId: String(id), classname, targetname, props: { classname, targetname }, connections,
+      source: { kind: 'vpk', file: 'maps/x/entities/x.vents_c', container: 'default_ents', scope: '', templated: false },
+    });
+    const entities = [
+      mk(1, 'func_button', 'hearth_but', [
+        c('OnPressed', 'filter_script', 'RunScriptInput', 'CheckOwner'),
+        c('OnUser4', 'hearth_maker', 'ForceSpawn'),
+        c('OnUser4', '!self', 'Lock'),
+        ...(lockAgain ? [c('OnUser4', '!self', 'Unlock', '', 65)] : []),
+      ]),
+      mk(2, 'point_script', 'filter_script', []),
+      mk(3, 'env_entity_maker', 'hearth_maker', []),
+    ];
+    return { g: new EntityGraph(entities), button: entities[0] };
+  };
+
+  it('takes the OnUser output a script answers the press with', () => {
+    for (const lockAgain of [true, false]) {
+      const { g, button } = scriptButton(lockAgain);
+      expect(suggestEvents(g, button)[0].event).toBe('OnUser4');
+    }
+  });
+
   it('writes event handlers without "type" like the GFL configs', () => {
     const { item } = suggestItemForWeapon(byName('fire_weapon'), graph);
     const text = serializeEntWatchConfig({ items: [item] }, { comments: false });

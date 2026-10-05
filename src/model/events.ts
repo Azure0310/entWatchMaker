@@ -99,12 +99,15 @@ function analyseChain(graph: EntityGraph, e: MapEntity, output: string): ChainIn
 export function suggestEvents(graph: EntityGraph, e: MapEntity): EventGuess[] {
   const outputs = [...new Set(e.connections.map((c) => c.output).filter((o) => o.length > 0))];
   const guesses: EventGuess[] = [];
+  /** Outputs that lead to the cooldown chain: they win a tie. */
+  const toCooldown = new Set<string>();
   for (const o of outputs) {
     const info = analyseChain(graph, e, o);
     let score = prior(e.classname, o);
     const why: string[] = [];
     if (info.reachesDelayedReenable && info.delayed) {
       score += 4;
+      toCooldown.add(o);
       why.push(`leads to ${info.delayed.input} after ${info.delayed.delay}s (cooldown chain)`);
     } else if (info.reachesLock) {
       score += 1;
@@ -122,7 +125,22 @@ export function suggestEvents(graph: EntityGraph, e: MapEntity): EventGuess[] {
     const known = KNOWN_OUTPUTS[e.classname] ?? [];
     known.forEach((o, i) => guesses.push({ event: o, score: prior(e.classname, o) - i * 0.01, reason: 'class default (no connections in map)' }));
   }
-  guesses.sort((a, b) => b.score - a.score || a.event.localeCompare(b.event));
+  // A press that only asks a script (OnPressed → RunScriptInput CheckOwner) is answered through the
+  // entity's own OnUserN when the script lets the use through: that output, locking the entity or
+  // starting its cooldown, is the use (ze_genso_of_last_v4, ze_goldeneye_64)
+  const answered = guesses.some((g) => /^onuser[1-4]$/i.test(g.event) && (toCooldown.has(g.event) || g.reason.startsWith('locks something')));
+  if (answered) {
+    for (const g of guesses) {
+      const conns = e.connections.filter((c) => c.output === g.event && !HOUSEKEEPING.has(c.input.toLowerCase()));
+      const asksScript = conns.length > 0 && conns.every((c) => c.input.toLowerCase() === 'runscriptinput' && graph.connectionTargets(e, c).every((t) => t.classname === 'point_script' || t.classname === 'logic_script'));
+      if (!asksScript) continue;
+      g.score -= 4;
+      g.reason += ', only asks a script that answers through OnUser';
+    }
+  }
+  // on a tie the output that leads to the cooldown chain is the use (ze_genso_of_last_v4 hearth_but:
+  // OnPressed only asks a script, which fires OnUser4 with the effects and the 65 s Unlock)
+  guesses.sort((a, b) => b.score - a.score || Number(toCooldown.has(b.event)) - Number(toCooldown.has(a.event)) || a.event.localeCompare(b.event));
   return guesses;
 }
 
