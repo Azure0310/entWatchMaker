@@ -113,6 +113,8 @@ English summary is at the bottom.
 **クールダウン推定**: 使用そのものが起こす配線だけを見ます。押下（とハンドラの event）から出力を遅延を足し合わせながら追い、
 通り道のゲート（ボタン / フィルタ / relay / branch …）が `Lock` → `Unlock`、`Disable` → `Enable`、
 `SetValue 1` → `SetValue 0` で閉じてから再び開くまでの時間をクールダウンにします（ハンドラより手前のゲートを優先し、複数あれば最も遅いもの）。
+1 回しか発火しない出力を使用が使い切り、後で `AddOutput` で足し直す配線（`OnUser1 → !self AddOutput "OnUser4>!self>FireUser1>>0>1"` を 30 秒後）も、
+足し直すまでをクールダウンにします（ze_last_man_standing_p）。
 ゾンビの沈黙スキルが人間のアイテム relay を 8 秒止める、ボスの relay がアイテムの branch を戻す、といった他の配線からの再有効化は数えません。
 2 秒以下の遅延は連打防止として cooldown 0（GFL 設定もほぼ 0。CS2Fixes は 1 秒の猶予を持つのでゲーム内の差もありません）、
 ボタンの `wait` は既定値 3 秒を超えるときだけ数えます。counter の `OnHitMax` / `OnHitMin`（数回使った後のオーバーヒート）は毎回のクールダウンに含めません。
@@ -385,7 +387,8 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   that locks it or starts its cooldown, which the script fires when it lets the use through. The cooldown is read
   from what the use itself sets off: the chain is followed from the press with the delays added up, and the cooldown is
   the time until the gates the use goes through (button, filter, relay, branch; those in front of the handler first) are
-  open again. Re-enables from other wiring (a zombie silence, a boss relay) do not count, delays of 2 s or less are
+  open again (a once-only output the use spends stays closed until an `AddOutput` adds it back). Re-enables from
+  other wiring (a zombie silence, a boss relay) do not count, delays of 2 s or less are
   double-press guards (cooldown 0), a button `wait` counts only above the default 3 s, and a counter's `OnHitMax` /
   `OnHitMin` (an overheat after several uses) is not the per-use cooldown. An I/O search tab (`in:unlock`,
   `out:onpressed`, `class:filter`, …) lists every connection in the map and can add a handler from any row.

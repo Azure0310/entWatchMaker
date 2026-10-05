@@ -93,6 +93,21 @@ describe('cooldown: the time until the gates the use goes through are open again
     const other = mk('logic_relay', 'kirito_combo', '63', {}, [c('OnTrigger', 'kirito_branch', 'SetValue', '0'), c('OnTrigger', 'kirito_branch', 'SetValue', '1', 6.2)]);
     expect(inferCooldown(graphOf(ui, branch, relay, other), branch, 'OnTrue')?.seconds).toBe(12);
   });
+
+  it('reads a once-only output the use spends and an AddOutput adds back later', () => {
+    // ze_last_man_standing_p: the filter fires the button's OnUser4, which fires OnUser1 only once;
+    // OnUser1 does the ability and adds OnUser4 → FireUser1 back 30 s later
+    const button = mk('func_button', 'zerog_ui', '4470', {}, [
+      c('OnPressed', 'zerog_context', 'TestActivator'),
+      { ...c('OnUser4', '!self', 'FireUser1'), timesToFire: 1 },
+      c('OnUser1', 'zerog_projectile', 'Enable'),
+      c('OnUser1', 'zerog_projectile', 'Disable', '', 1),
+      c('OnUser1', '!self', 'AddOutput', 'OnUser4>!self>FireUser1>>0>1', 30),
+    ]);
+    const filter = mk('filter_activator_context', 'zerog_context', '13463', {}, [c('OnPass', 'zerog_ui', 'FireUser4')]);
+    const projectile = mk('trigger_push', 'zerog_projectile', '4471', { startdisabled: '1' });
+    expect(inferCooldown(graphOf(button, filter, projectile), filter, 'OnPass')?.seconds).toBe(30);
+  });
 });
 
 describe('counters: uses (announced, mode 3 / 4) or a value (mode 5)', () => {

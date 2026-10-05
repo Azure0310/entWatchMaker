@@ -260,10 +260,26 @@ function gateEvents(steps: Step[]): Map<number, GateEvents> {
           of(x).closes.push(armed.t);
           of(x).opens.push({ t: s.t, reason: why(` ${s.c.param || '""'}`) });
         }
+      } else if (input === 'addoutput') {
+        // an output that fires only once, spent by the use and added back later (ze_last_man_standing_p
+        // OnUser4 → !self FireUser1 once; OnUser1 → !self AddOutput "OnUser4>!self>FireUser1>>0>1" @30)
+        const re = rearmed(s.c.param);
+        const spent = re && steps.find((o) => o.t <= s.t && o.from.id === x.id && o.c.timesToFire === 1 && o.c.output.toLowerCase() === re.output && o.c.input.toLowerCase() === re.input);
+        if (spent) {
+          of(x).closes.push(spent.t);
+          of(x).locked = true;
+          of(x).opens.push({ t: s.t, reason: why(` "${s.c.param}" (adds back the once-only ${spent.c.output} → ${spent.c.input})`) });
+        }
       }
     }
   }
   return map;
+}
+
+/** The output an AddOutput parameter creates: "OnUser4>!self>FireUser1>>0>1" or "OnUser4 !self:FireUser1::0:1". */
+function rearmed(param: string): { output: string; input: string } | null {
+  const m = /^\s*(\w+)\s*(?:>|\s)\s*[^>:]+[>:]\s*(\w+)/.exec(param);
+  return m ? { output: m[1].toLowerCase(), input: m[2].toLowerCase() } : null;
 }
 
 /**
