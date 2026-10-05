@@ -22,14 +22,15 @@ const STRIP_PLAYER_INPUTS = new Set(['strip', 'stripweapons', 'stripweaponsandsu
 /**
  * True when firing `input` (with `param`) at `e` takes the player's weapons away. Besides the
  * plain player_weaponstrip, workshop maps strip through scripts (point_script
- * RunScriptInput "StripKnife") or by finding the held knife with a point_entity_finder whose
+ * RunScriptInput "StripKnife", or "CanPickUpItem": a script that decides whether the toucher gets
+ * the item, ze_castlevania) or by finding the held knife with a point_entity_finder whose
  * OnFoundEntity kills it.
  */
 export function isStripInput(e: MapEntity, input: string, param: string): boolean {
   const inp = input.toLowerCase();
   if (STRIP_CLASSES.has(e.classname)) return true;
   if (!isWeaponEntity(e) && STRIP_PLAYER_INPUTS.has(inp)) return true;
-  if ((e.classname === 'point_script' || e.classname === 'logic_script') && inp === 'runscriptinput' && /strip/i.test(param)) return true;
+  if ((e.classname === 'point_script' || e.classname === 'logic_script') && inp === 'runscriptinput' && /strip|pick_?up/i.test(param)) return true;
   if (e.classname === 'point_entity_finder' && inp === 'findentity') {
     return e.connections.some((c) => c.output.toLowerCase() === 'onfoundentity' && /^kill/i.test(c.input));
   }

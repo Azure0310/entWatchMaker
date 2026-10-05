@@ -42,6 +42,21 @@ describe('eban triggers: what hands the item out, not the stage or the ability',
     expect(ids).not.toContain('322');
   });
 
+  it('lists the template trigger whose script decides who picks the knife up', () => {
+    const entities = [
+      mk('point_template', 'iz_tpl', '6390', { template01: 'iz_knife', template02: 'iz_button', template03: 'iz_strip' }),
+      mk('weapon_knife', 'iz_knife', '6392', { origin: '0 0 0' }, [], '6398#entityLumpName'),
+      mk('func_button', 'iz_button', '6393', { parentname: 'iz_knife' }, [c('OnPressed', 'iz_fx', 'Start')], '6398#entityLumpName'),
+      mk('info_particle_system', 'iz_fx', '6394', {}, [], '6398#entityLumpName'),
+      // touching it asks the map script whether the zombie may take the item (ze_castlevania)
+      mk('trigger_multiple', 'iz_strip', '6399', { filtername: 'filter_t', origin: '0 0 4' }, [c('OnStartTouch', 'map_script', 'RunScriptInput', 'CanPickUpItem'), c('OnUser4', '!self', 'Kill')], '6398#entityLumpName'),
+      mk('point_script', 'map_script', '100'),
+    ];
+    const g = new EntityGraph(entities);
+    const ids = findSelectionTriggers(g, entities[1]).map((s) => s.trigger.hammerId);
+    expect(ids).toEqual(['6399']);
+  });
+
   it("skips a teleport the item's own ability switches on (a zombie pulling humans in)", () => {
     const entities = [
       mk('weapon_knife', 'z_knife', '400', { origin: '0 0 0' }, [c('OnPlayerPickup', 'z_ui', 'Activate')]),
