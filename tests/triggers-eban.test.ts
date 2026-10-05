@@ -57,6 +57,21 @@ describe('eban triggers: what hands the item out, not the stage or the ability',
     expect(ids).toEqual(['6399']);
   });
 
+  it('lists a template zone that only hands the toucher to a script, not a disabled ability zone', () => {
+    const entities = [
+      mk('point_template', 'cure_tpl', '11080', { template01: 'cure_knife', template02: 'cure_pick', template03: 'cure_zone' }),
+      mk('weapon_knife', 'cure_knife', '11083', { origin: '0 0 0' }, [], '11081#entityLumpName'),
+      // on from the start: the script decides who takes the item (ze_atos)
+      mk('trigger_multiple', 'cure_pick', '11082', { filtername: 'zombie', origin: '-0.5 0 0' }, [c('OnTrigger', 'functions', 'RunScriptInput', 'FilterZombieName()')], '11081#entityLumpName'),
+      // the ability's zone: disabled until the use, also hands touchers to the script
+      mk('trigger_multiple', 'cure_zone', '11084', { startdisabled: '1', origin: '0 0 0' }, [c('OnStartTouch', 'functions', 'RunScriptInput', 'CureZombie()')], '11081#entityLumpName'),
+      mk('point_script', 'functions', '100'),
+    ];
+    const g = new EntityGraph(entities);
+    const ids = findSelectionTriggers(g, entities[1]).map((s) => s.trigger.hammerId);
+    expect(ids).toEqual(['11082']);
+  });
+
   it("skips a teleport the item's own ability switches on (a zombie pulling humans in)", () => {
     const entities = [
       mk('weapon_knife', 'z_knife', '400', { origin: '0 0 0' }, [c('OnPlayerPickup', 'z_ui', 'Activate')]),

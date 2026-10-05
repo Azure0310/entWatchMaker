@@ -1,6 +1,6 @@
 import type { EntityGraph } from './graph';
 import { friendlyName, isWeaponEntity, type MapEntity } from './entity';
-import { HOOKABLE_TRIGGERS, causedOutputs } from './roles';
+import { HOOKABLE_TRIGGERS, causedOutputs, isHousekeepingInput } from './roles';
 import { distance, minDistanceTo, spawnersOf, templateOf, worldPositions, type Vec3 } from './position';
 
 export { distance, origin } from './position';
@@ -73,6 +73,16 @@ function reach(
     frontier = next;
   }
   return null;
+}
+
+/** A trigger on from the start whose touch only hands the toucher to a script: "OnTrigger → functions RunScriptInput ...". */
+function pickupScript(graph: EntityGraph, trig: MapEntity): string | null {
+  if (trig.props.startdisabled === '1') return null;
+  const touches = trig.connections.filter((c) => /^on(starttouch|trigger|starttouchall)$/i.test(c.output));
+  if (touches.length === 0) return null;
+  const calls = touches.filter((c) => c.input.toLowerCase() === 'runscriptinput' && graph.connectionTargets(trig, c).some((t) => t.classname === 'point_script' || t.classname === 'logic_script'));
+  if (calls.length === 0 || calls.length !== touches.filter((c) => !isHousekeepingInput(c.input)).length) return null;
+  return `${calls[0].output} → ${calls[0].target} RunScriptInput ${calls[0].param}`;
 }
 
 /** The strip entity `e` reaches within `maxDepth` output hops (null when it strips nothing). */
@@ -238,11 +248,15 @@ export function findSelectionTriggers(
   const infos = hookable.map((t) => classifyTrigger(graph, t));
   const stripZones: MapEntity[] = [];
   for (const info of infos) {
-    if (!info.strips) continue;
     const tie = tiedToWeapon(graph, info.trigger, weapon);
     if (!tie) continue;
+    // a zone the map ties to the knife, on from the start, that hands the toucher to a script
+    // (ze_atos item_*_weapon_pick → functions RunScriptInput FilterZombieName()): the script picks
+    // who gets the item, as a strip would. An ability's zone waits disabled for the use.
+    const script = info.strips ? null : pickupScript(graph, info.trigger);
+    if (!info.strips && !script) continue;
     stripZones.push(info.trigger);
-    out.push({ trigger: info.trigger, kind: 'strip', reason: `strip zone ${tie} (${info.strips.via})` });
+    out.push({ trigger: info.trigger, kind: 'strip', reason: info.strips ? `strip zone ${tie} (${info.strips.via})` : `pickup zone ${tie} (${script})` });
   }
   if (stripZones.length === 0) {
     // nothing tied: a strip zone sitting right on the knife, and nearer to it than to any other
