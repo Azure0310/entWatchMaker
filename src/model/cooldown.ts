@@ -373,6 +373,44 @@ export function inferCooldown(graph: EntityGraph, e: MapEntity, event?: string):
   return { ...best, seconds: round(best.seconds), reason: `${best.reason}; the use locks it and other wiring opens it again` };
 }
 
+/** Outcomes of a choice (a case, a branch, a compare, a filter that fails): they happen only sometimes. */
+const CHOICE_OUTPUTS = /^(oncase\d+|ondefault|ontrue|onfalse|onequalto|onnotequalto|onlessthan|ongreaterthan|onfail)$/i;
+/** Seconds within which a single-use item kills or locks itself: with its effect, not at the end of a stage. */
+const USED_UP_WITHIN = 15;
+
+/**
+ * Single use: with the use (within 15 s, not through another entity's choice), the use kills
+ * the handler or the button it hangs on, or locks / disables it and nothing in the map opens it
+ * again (no Unlock / Enable / Toggle anywhere). The GFL configs write such items as mode 3 with
+ * maxuses 1 (ze_zertinan summons: the filter locks the button; ze_steyliff_grove elixirs: the
+ * button kills itself). A stage button or relay in front of the handler that later kills itself,
+ * or a random case that sometimes kills the button (Mimic Materia), is not.
+ */
+export function usedUp(graph: EntityGraph, e: MapEntity, event?: string): { reason: string } | null {
+  const front = inFront(graph, e);
+  const own = { e, first: event ? (o: string) => o.toLowerCase() === event.toLowerCase() : defaultUseOutputs(e) };
+  const fromRoots = front.roots.map((r) => ({ e: r.root, first: (o: string) => o.toLowerCase() === r.output.toLowerCase() }));
+  const buttons = new Set([e.id, ...front.roots.filter((r) => isUseEntity(r.root)).map((r) => r.root.id)]);
+  const steps = useTimeline(graph, [own, ...fromRoots]);
+  /** Part of every use, right away: not a later effect, not another entity's choice. */
+  const rightAway = (s: Step) => s.t <= USED_UP_WITHIN && (s.from.id === e.id || !CHOICE_OUTPUTS.test(s.c.output));
+  for (const s of steps) {
+    if (!rightAway(s) || !/^kill(hierarchy)?$/i.test(s.c.input)) continue;
+    const x = s.targets.find((t) => buttons.has(t.id));
+    if (x) return { reason: `${label(s.from)} ${s.c.output} → ${label(x)} ${s.c.input} (${round(s.t)}s after the use)` };
+  }
+  for (const ev of gateEvents(steps).values()) {
+    const x = ev.gate;
+    if (!buttons.has(x.id) || !ev.locked || reopening(ev, false) !== 'closed') continue;
+    // an Unlock that can fire only once (the pickup trigger_once, an "only once" output) arms the item before its use
+    const reopens = graph.incomingConnections(x).filter(({ from, connection }) => (REENABLE_INPUTS.has(connection.input.toLowerCase()) || /^toggle/i.test(connection.input)) && from.classname !== 'trigger_once' && connection.timesToFire !== 1);
+    if (reopens.length > 0) continue;
+    const s = steps.find((st) => rightAway(st) && st.targets.includes(x) && DISABLE_INPUTS.has(st.c.input.toLowerCase()));
+    if (s) return { reason: `${label(s.from)} ${s.c.output} → ${label(x)} ${s.c.input}, and nothing opens it again` };
+  }
+  return null;
+}
+
 // ---- counters ------------------------------------------------------------------------------------
 
 export interface CounterUse {

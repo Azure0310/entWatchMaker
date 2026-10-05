@@ -2,7 +2,7 @@ import type { EntityGraph } from './graph';
 import { friendlyName, isWeaponEntity, type MapEntity } from './entity';
 import type { HandlerConfig, HandlerMode, HandlerType, ItemConfig } from './entwatch';
 import { newHandler, newItem } from './entwatch';
-import { counterUse, hasSelfCooldown, inferCooldown } from './cooldown';
+import { counterUse, hasSelfCooldown, inferCooldown, usedUp } from './cooldown';
 import { suggestEvents } from './events';
 import { abilityReach, findSelectionTriggers, isKnife, stripsVia, switchedOnBy } from './triggers';
 import { HOOKABLE_TRIGGERS, abilityOutputs, hasUseOutput, isArmInput, isCounter, isFilter, isGameUi, isGate, isHousekeepingInput, isUseEntity, isUseLike, keyLabel } from './roles';
@@ -124,9 +124,14 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
       if (s.mode === 1) s.mode = 2;
     }
     const limit = fireLimit(e, s.event);
+    const once = limit ? null : usedUp(graph, e, s.event);
     if (limit) {
       s.maxuses = limit.uses;
       s.maxusesReason = limit.reason;
+      s.mode = 3;
+    } else if (once) {
+      s.maxuses = 1;
+      s.maxusesReason = `single use: ${once.reason}`;
       s.mode = 3;
     }
   } else if (graph) {
@@ -843,20 +848,34 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   const announcing = new Set<number>();
   /** Gates the counter replaces: no handlers, but still part of the item's logic (its ability teleports). */
   const replacedByGauge: MapEntity[] = [];
+  // A counter that counts the uses and kills or locks the button at its limit (ammo: mines, rockets,
+  // charges) replaces them the same way; it announces each use itself (mode 3), so the button stays
+  // a plain +use hook (GFL: "button + counter").
   for (const { c: bc } of [...chosen]) {
     const button = bc.entity;
     if (!isUseEntity(button) || isGameUi(button)) continue;
-    const gauges = graph
+    // A gauge locking the button counts whatever refills it (a pickup, another item); a use count or
+    // a counter that kills the button only when the press's chain or a clock steps it, not a boss's
+    // damage (a boss HP counter that stops the items when the boss dies)
+    const ownCounter = (k: MapEntity) =>
+      graph
+        .incomingConnections(k)
+        .filter(({ connection }) => /^(add|subtract)$/i.test(connection.input))
+        .every(({ from }) => from.id === k.id || from.classname === 'logic_timer' || firesWithin(graph, button, from, 4));
+    const stops = graph
       .incomingConnections(button)
-      .filter(({ from, connection }) => isCounter(from) && /^(lock|disable)$/i.test(connection.input))
+      .filter(({ from, connection }) => isCounter(from) && (/^(lock|disable)$/i.test(connection.input) || (/^kill(hierarchy)?$/i.test(connection.input) && /^on(hitmax|hitmin)$/i.test(connection.output))));
+    const lockGauge = (k: MapEntity) => !counterUse(graph, k) && stops.some(({ from, connection }) => from.id === k.id && /^(lock|disable)$/i.test(connection.input));
+    const limiters = stops
       .map(({ from }) => from)
-      .filter((k, i, all) => all.indexOf(k) === i && !!k.hammerId && !counterUse(graph, k));
-    for (const counter of gauges) {
+      .filter((k, i, all) => all.indexOf(k) === i && !!k.hammerId && (lockGauge(k) || ownCounter(k)));
+    for (const counter of limiters) {
+      const countsUses = !!counterUse(graph, counter);
       if (!chosen.some(({ c }) => c.entity.id === counter.id)) {
-        consider(counter, `locks ${label(button)} when it runs out`, 3);
+        consider(counter, `${countsUses ? 'stops' : 'locks'} ${label(button)} when it runs out`, 3);
         const nc = byId.get(counter.id);
         if (!nc) continue;
-        chosen.push({ c: nc, extra: 'the charges / fuel / recast the item shows on the HUD' });
+        chosen.push({ c: nc, extra: countsUses ? 'the uses (ammo, charges) of the item, which it announces' : 'the charges / fuel / recast the item shows on the HUD' });
         included.add(counter.id);
         for (let i = skipped.length - 1; i >= 0; i--) if (skipped[i].startsWith(`${label(counter)} (`)) skipped.splice(i, 1);
       }
@@ -864,11 +883,15 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
         const x = chosen[i].c.entity;
         if (x.id === counter.id || isUseEntity(x) || isCounter(x)) continue;
         if (firesWithin(graph, button, x, 4)) {
-          skipped.push(`${label(x)} (${x.classname}, set off by ${label(button)}, which reports the press while ${label(counter)} shows the item on the HUD)`);
+          skipped.push(`${label(x)} (${x.classname}, set off by ${label(button)}, which ${countsUses ? `${label(counter)} counts` : `reports the press while ${label(counter)} shows the item on the HUD`})`);
           chosen.splice(i, 1);
           included.delete(x.id);
           replacedByGauge.push(x);
         }
+      }
+      if (countsUses) {
+        notes.push(`${label(counter)} counts the uses of ${label(button)} and stops it at its limit`);
+        continue;
       }
       announcing.add(button.id);
       notes.push(`${label(button)} reports the press: ${label(counter)} shows the item on the HUD, and CS2Fixes prints no use for a counter shown as a value`);

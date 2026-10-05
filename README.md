@@ -139,8 +139,14 @@ filter / relay）が 1 ずつ `Add` / `Subtract` し、タイマーや自分自�
 弾数・燃料・リキャストのように、使い切るとボタンを `Lock` / `Disable` し、タイマーで回復・消費する counter は、押下から続く
 relay / branch の代わりに mode 5 で HUD に出し、ボタン自身が押下を通知します（`OnPressed`、mode 1、HUD なし）。
 GFL 設定もこうした counter を持つアイテムの 40 件中 34 件が「ボタン + counter」です。
+使用回数を数え、上限（`OnHitMax` / `OnHitMin`）でボタンを Kill / Lock する counter（地雷・ロケットの弾数）も同じように
+手前の relay / branch の代わりにハンドラにします。こちらは counter 自身が使用を通知する（mode 3）ので、ボタンは +use のフックのままです。
+ただし counter を増減させるのがアイテムの使用とタイマーだけのときに限ります（ボスの HP counter が倒れたときにアイテムを止める形は除きます）。
 
 **使用回数**: ハンドラ自身の出力が N 回しか発火しない（Hammer の Only once）ときは mode 3 / maxuses N にします。
+使用から 15 秒以内に、ハンドラかそのボタンを Kill する、または Lock / Disable してマップのどこからも Unlock / Enable しない
+アイテムは使い切り（mode 3 / maxuses 1）です。拾ったときの trigger_once など一度しか発火しない Unlock は使用前の準備なので数えません。
+別のエンティティの分岐（ランダムな case の一部の結果）や、手前にあるステージのボタンが後で自分を Kill するのは使い切りではありません。
 出力の無いボタンでも、アイテムのロジックが Lock / Unlock しているもの（ze_santassination_p）は +use のフックとして残します。
 
 **ハンドラにしないもの**: `Kill` / `Disable` / `Enable` / `Deactivate` / `CancelPending` / `Lock` / `Unlock` などの後始末入力は
@@ -295,7 +301,7 @@ GFL がフックするボタンをフックしているか（CS2Fixes は button
 アイテムが HUD に出るか（CS2Fixes は ui のどれかが有効なら 1 行出します。GFL の `"counter"`（mode 6）は counter の表示として比べます）、
 cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers（CS2Fixes と同じくマップ全体で比べます）。
 「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
-良くなったか確かめてください（2026-10 時点の 181 マップで、ゲーム内で同じ動き 71%、完全一致 54%）。
+良くなったか確かめてください（2026-10 時点の 186 マップで、ゲーム内で同じ動き 74%、完全一致 55%）。
 
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
@@ -418,7 +424,14 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   outcomes the one that locks the item / has a cooldown wins over a colour-and-sound "not ready" reply. Ammo, fuel or a
   recast that locks / disables the button when it runs out and is refilled or drained by a timer is shown on the HUD
   (mode 5) in place of the relays / branches the press sets off, and the button reports the press (`OnPressed`,
-  mode 1, no HUD) — "button + counter" is what GFL writes for 34 of the 40 items with such a counter.
+  mode 1, no HUD) — "button + counter" is what GFL writes for 34 of the 40 items with such a counter. A counter that
+  counts the uses and kills / locks the button at its limit (`OnHitMax` / `OnHitMin`: mines, rockets) replaces them the
+  same way but announces the uses itself (mode 3), so the button stays a plain +use hook — as long as only the item's
+  use and timers step it (a boss HP counter that stops the items when the boss dies is not one).
+- Single use: when, within 15 s of the use and not through another entity's choice, the use kills the handler or its
+  button, or locks / disables it and nothing in the map unlocks / enables it again, the item gets mode 3 / maxuses 1.
+  An Unlock that can fire only once (the pickup trigger_once, an "only once" output) arms the item before its use and
+  does not count; a random case outcome or a stage button that kills itself later is not a single use.
 - Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
   that is not a skybox and has the most entity data, not the biggest file.
 - Accuracy: `npm run evaluate -- <CS2-ZE-Configs/entwatch> <workshop/content/730 or map folders> --out eval` compares
@@ -431,8 +444,8 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   are no extra ones, uses are announced alike (a counter in mode 5 never announces), the item is on the HUD when GFL
   puts it there (CS2Fixes shows one line per item; GFL's `"type": "counter"` / `"mode": 6`, which CS2Fixes does not
   know, is compared as the counter display it is meant to be), the cooldown is within 1 s (2 s or less counts as none),
-  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026, 181 maps: 71% behave the same
-  in game, 54% are identical; "What differs in game" lists the rest by kind.
+  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026, 186 maps: 74% behave the same
+  in game, 55% are identical; "What differs in game" lists the rest by kind.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.
