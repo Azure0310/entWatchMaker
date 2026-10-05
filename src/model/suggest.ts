@@ -983,6 +983,14 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
   // +use (the GFL convention: {"type": "button", "hammerid": "..."}); messages come from the follow-up.
   // A counter shown as a value announces nothing, so then the button keeps reporting the press.
   const hasFollowUp = item.handlers.some((h) => h.type !== 'button' && h.message !== false);
+  // A button with a cooldown or uses of its own that none of the follow-ups hangs on keeps reporting
+  // its press (ze_castlevania belmont_button2: a 100 s special beside the attack case behind the other
+  // button; ze_genso_of_last_v4: OnUser4 with its 65 s Unlock beside a game_ui key's compare).
+  const entityOf = (h: HandlerConfig) => graph.byHammerId.get(h.hammerid)?.[0];
+  const followed = (h: HandlerConfig) => {
+    const b = entityOf(h);
+    return !!b && item.handlers.some((o) => o.type !== 'button' && o.message !== false && !!entityOf(o) && firesWithin(graph, b, entityOf(o)!, 4));
+  };
   const announcingIds = new Set([...announcing].map((id) => graph.byId.get(id)?.hammerId));
   if (announcingIds.size === 0 && item.handlers.some((h) => h.type === 'button') && !hasFollowUp && item.handlers.some((h) => h.type !== 'button')) {
     notes.push('the handlers behind the button announce nothing (a counter shown as a value), so the button reports the press');
@@ -997,7 +1005,7 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       h.maxuses = 0;
       continue;
     }
-    if (!hasFollowUp) continue;
+    if (!hasFollowUp || (!followed(h) && ((h.cooldown ?? 0) > 0 || h.mode === 3 || h.mode === 4))) continue;
     h.mode = 1;
     h.event = undefined;
     h.message = false;

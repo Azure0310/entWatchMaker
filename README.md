@@ -148,6 +148,9 @@ GFL 設定もこうした counter を持つアイテムの 40 件中 34 件が�
 アイテムは使い切り（mode 3 / maxuses 1）です。拾ったときの trigger_once など一度しか発火しない Unlock は使用前の準備なので数えません。
 別のエンティティの分岐（ランダムな case の一部の結果）や、手前にあるステージのボタンが後で自分を Kill するのは使い切りではありません。
 出力の無いボタンでも、アイテムのロジックが Lock / Unlock しているもの（ze_santassination_p）は +use のフックとして残します。
+後ろに filter / relay などのハンドラがあるアイテムのボタンは +use のフックだけにしますが、自分のクールダウンや使用回数を持ち、
+後ろのハンドラにつながっていないボタン（別のボタンの攻撃とは別の必殺技、game_ui のキーとは別に OnUser4 で数えるボタン）は
+そのまま押下を報告します。
 
 **ハンドラにしないもの**: `Kill` / `Disable` / `Enable` / `Deactivate` / `CancelPending` / `Lock` / `Unlock` などの後始末入力は
 「ボタンから撃たれている」に数えません。`OnBreak` しか撃たない physbox（当たり判定）、出力の無い filter（ナイフ除去用の部品）、
@@ -415,7 +418,10 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
 - Button → filter → relay / counter: a filter that only checks the user and hands the use on to relays / cases /
   counters is replaced by those (as in most GFL configs); a filter with effects of its own stays, unless it counts an
   item-specific `math_counter`, which then reports the use. An output that fires only N times gives mode 3 / maxuses N.
-  A button without outputs that the item's logic locks and unlocks is still the +use hook.
+  A button without outputs that the item's logic locks and unlocks is still the +use hook. Buttons become plain +use
+  hooks when a filter / relay / counter handler follows; one with a cooldown or uses of its own that no follow-up hangs
+  on (a special beside the attack behind another button, a button counting on OnUser4 beside a game_ui key) keeps
+  reporting its press.
 - Counters: CS2Fixes never announces the uses of a counter in mode 5 (a value). A counter the item's use steps by one
   (Add → counterup, Subtract → counterdown), not driven by a timer or a loop of its own and not stepped back by the same
   source, counts uses: mode 3 with the cooldown read in front of it, or mode 4 when reaching the limit locks the item

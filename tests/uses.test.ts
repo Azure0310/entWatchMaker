@@ -92,6 +92,33 @@ describe('single-use items', () => {
   });
 });
 
+describe('buttons beside a follow-up', () => {
+  it('keeps a second button with its own cooldown reporting its press', () => {
+    const { graph, byName } = graphWith((mk, c) => [
+      mk('point_template', 'belmont_template', '300', { template01: 'belmont_wpn', template02: 'belmont_button', template03: 'belmont_button2', template04: 'belmont_case' }),
+      mk('weapon_elite', 'belmont_wpn', '792', { origin: '0 0 0' }),
+      // the attack: button → case, which does the work
+      mk('func_button', 'belmont_button', '6133', { parentname: 'belmont_wpn', wait: '1' }, [c('OnPressed', 'belmont_case', 'PickRandom')]),
+      mk('logic_case', 'belmont_case', '797', {}, [c('OnCase01', 'belmont_whip', 'Enable'), c('OnCase01', 'belmont_whip', 'Disable', '', 0.5)]),
+      mk('trigger_hurt', 'belmont_whip', '798', { startdisabled: '1' }),
+      // the special: a button of its own, locked for 100 s
+      mk('func_button', 'belmont_button2', '6135', { parentname: 'belmont_wpn', wait: '1' }, [
+        c('OnPressed', 'belmont_holy', 'ForceSpawn'),
+        c('OnPressed', '!self', 'Lock'),
+        c('OnPressed', '!self', 'Unlock', '', 100),
+      ]),
+      mk('env_entity_maker', 'belmont_holy', '799', { entitytemplate: 'holy_water' }),
+      // a third button with no cooldown: only a +use hook
+      mk('func_button', 'belmont_taunt', '6136', { parentname: 'belmont_wpn', wait: '1' }, [c('OnPressed', 'belmont_voice', 'StartSound')]),
+      mk('point_soundevent', 'belmont_voice', '6137', {}),
+    ]);
+    const { item } = suggestItemForWeapon(byName('belmont_wpn'), graph);
+    expect(handler(item, '6135')).toMatchObject({ mode: 2, cooldown: 100 });
+    expect(handler(item, '6133')).toMatchObject({ mode: 1 });
+    expect(handler(item, '6136')?.mode ?? 1).toBe(1);
+  });
+});
+
 describe('counters that stop the button at their limit', () => {
   it('lists the ammo counter in place of the relay that steps it', () => {
     const { graph, byName } = graphWith((mk, c) => [
