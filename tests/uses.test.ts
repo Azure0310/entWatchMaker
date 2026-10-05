@@ -92,6 +92,30 @@ describe('single-use items', () => {
   });
 });
 
+describe('a template mate the chain reaches late', () => {
+  it('takes the relay behind filter → compare even when the template listed it first', () => {
+    const { graph, byName } = graphWith((mk, c) => [
+      mk('point_template', 'heal_template', '300', { template01: 'heal_wpn', template02: 'heal_relay', template03: 'heal_button', template04: 'heal_filter' }),
+      mk('weapon_elite', 'heal_wpn', '758', { origin: '0 0 0' }),
+      mk('logic_relay', 'heal_relay', '760', {}, [
+        c('OnTrigger', 'heal_button', 'Lock'),
+        c('OnTrigger', 'heal_button', 'Unlock', '', 50),
+        c('OnTrigger', 'heal_zone', 'FireUser1'),
+      ]),
+      mk('func_button', 'heal_button', '763', { parentname: 'heal_wpn', wait: '1' }, [c('OnPressed', 'heal_filter', 'TestActivator')]),
+      mk('filter_activator_name', 'heal_filter', '762', { filtername: 'heal_user' }, [c('OnPass', 'heal_compare', 'Compare')]),
+      mk('trigger_hurt', 'heal_zone', '761', { startdisabled: '1', damage: '-20' }),
+      // the map switches the item off and on through the compare's value
+      { ...mk('logic_compare', 'heal_compare', '759', { comparevalue: '1', initialvalue: '1' }, [c('OnEqualTo', 'heal_relay', 'Trigger')]), source: { kind: 'vpk', file: 'maps/x/entities/x.vents_c', container: 'default_ents', scope: '', templated: false } } as MapEntity,
+      { ...mk('logic_relay', 'materia_disable', '433', {}, [c('OnTrigger', 'heal_compare', 'SetValue', '0')]), source: { kind: 'vpk', file: 'maps/x/entities/x.vents_c', container: 'default_ents', scope: '', templated: false } } as MapEntity,
+    ]);
+    const { item } = suggestItemForWeapon(byName('heal_wpn'), graph);
+    expect(item.handlers.map((h) => h.hammerid)).toEqual(['763', '760']);
+    expect(handler(item, '760')).toMatchObject({ mode: 2, cooldown: 50 });
+    expect(handler(item, '763')).toMatchObject({ mode: 1 });
+  });
+});
+
 describe('buttons beside a follow-up', () => {
   it('keeps a second button with its own cooldown reporting its press', () => {
     const { graph, byName } = graphWith((mk, c) => [

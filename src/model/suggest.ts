@@ -776,7 +776,19 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
       if (nextIn.length > 0 || next.length === 0) {
         skipped.push(`${label(x)} (${x.classname}, only hands the use on to ${nextIn.map(label).join(', ')}${replies.length > 0 ? `; ${replies.map(label).join(', ')} only answers "not ready"` : ''})`);
         for (const t of nextIn) {
-          if (byId.has(t.id)) continue;
+          const known = byId.get(t.id);
+          if (known) {
+            // already a candidate (a template mate judged before the chain reached it: ze_crazy_christmas_p
+            // button → filter → compare → heal_relay): the use feeds it all the same, so judge it again
+            if (fed && !known.fedVia && !included.has(t.id)) {
+              known.fedVia = true;
+              if (decided.delete(t.id)) {
+                for (let i = skipped.length - 1; i >= 0; i--) if (skipped[i].startsWith(`${label(t)} (`)) skipped.splice(i, 1);
+                gateQueue.push(known);
+              }
+            }
+            continue;
+          }
           consider(t, `behind ${label(x)} (${c.why})`, 3, { key: c.key, fedVia: fed || undefined });
           const nc = byId.get(t.id);
           if (nc) gateQueue.push(nc);
