@@ -375,6 +375,8 @@ export function inferCooldown(graph: EntityGraph, e: MapEntity, event?: string):
 
 /** Outcomes of a choice (a case, a branch, a compare, a filter that fails): they happen only sometimes. */
 const CHOICE_OUTPUTS = /^(oncase\d+|ondefault|ontrue|onfalse|onequalto|onnotequalto|onlessthan|ongreaterthan|onfail)$/i;
+/** A physbox breaking or taking damage: not what the use does (AddHealth on it fires no OnBreak). */
+const DAMAGE_OUTPUTS = /^on(break|damaged|healthchanged|takedamage|death|killed)$/i;
 /** Seconds within which a single-use item kills or locks itself: with its effect, not at the end of a stage. */
 const USED_UP_WITHIN = 15;
 
@@ -389,11 +391,13 @@ const USED_UP_WITHIN = 15;
 export function usedUp(graph: EntityGraph, e: MapEntity, event?: string): { reason: string } | null {
   const front = inFront(graph, e);
   const own = { e, first: event ? (o: string) => o.toLowerCase() === event.toLowerCase() : defaultUseOutputs(e) };
-  const fromRoots = front.roots.map((r) => ({ e: r.root, first: (o: string) => o.toLowerCase() === r.output.toLowerCase() }));
-  const buttons = new Set([e.id, ...front.roots.filter((r) => isUseEntity(r.root)).map((r) => r.root.id)]);
+  // a physbox breaking or taking damage (the troll dying) is not a use of the item
+  const presses = front.roots.filter((r) => !DAMAGE_OUTPUTS.test(r.output));
+  const fromRoots = presses.map((r) => ({ e: r.root, first: (o: string) => o.toLowerCase() === r.output.toLowerCase() }));
+  const buttons = new Set([e.id, ...presses.filter((r) => isUseEntity(r.root)).map((r) => r.root.id)]);
   const steps = useTimeline(graph, [own, ...fromRoots]);
   /** Part of every use, right away: not a later effect, not another entity's choice. */
-  const rightAway = (s: Step) => s.t <= USED_UP_WITHIN && (s.from.id === e.id || !CHOICE_OUTPUTS.test(s.c.output));
+  const rightAway = (s: Step) => s.t <= USED_UP_WITHIN && (s.from.id === e.id || !CHOICE_OUTPUTS.test(s.c.output)) && !DAMAGE_OUTPUTS.test(s.c.output);
   for (const s of steps) {
     if (!rightAway(s) || !/^kill(hierarchy)?$/i.test(s.c.input)) continue;
     const x = s.targets.find((t) => buttons.has(t.id));

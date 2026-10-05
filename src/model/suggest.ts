@@ -91,18 +91,24 @@ export interface HandlerSuggestion {
 /**
  * Uses allowed by the entity's own outputs: when the output EntWatch watches (`event`) fires
  * only N times ("Only once" in Hammer), the ability can be used N times. Housekeeping outputs
- * (Kill / Lock / Disable, ...) and other outputs (a one-off OnUser1 for a boss) do not count.
+ * (Kill / Lock / Disable, ...) and other outputs (a one-off OnUser1 for a boss) do not count, and
+ * every output that does something must be limited: a one-off on the side (the first use's sound,
+ * a movement fix, a second maker spawned once) leaves the rest firing on each use.
  * The GFL configs write such items as mode 3 with maxuses N.
  */
-function fireLimit(e: MapEntity, event: string | undefined): { uses: number; reason: string } | null {
+function fireLimit(graph: EntityGraph, e: MapEntity, event: string | undefined): { uses: number; reason: string } | null {
   if (!event) return null;
-  let best: { uses: number; reason: string } | null = null;
-  for (const c of e.connections) {
-    if (c.output.toLowerCase() !== event.toLowerCase()) continue;
-    if (!(c.timesToFire > 0) || isHousekeepingInput(c.input)) continue;
-    if (!best || c.timesToFire < best.uses) best = { uses: c.timesToFire, reason: `${c.output} → ${c.target} ${c.input} fires ${c.timesToFire === 1 ? 'only once' : `${c.timesToFire} times`}` };
-  }
-  return best;
+  const effects = e.connections.filter(
+    (c) =>
+      c.output.toLowerCase() === event.toLowerCase() &&
+      !isHousekeepingInput(c.input) &&
+      !FEEDBACK_INPUTS.has(c.input.toLowerCase()) &&
+      !graph.connectionTargets(e, c).every((t) => FEEDBACK_CLASSES.has(t.classname)),
+  );
+  if (effects.length === 0 || !effects.every((c) => c.timesToFire > 0)) return null;
+  const last = effects.reduce((a, b) => (b.timesToFire > a.timesToFire ? b : a));
+  const others = effects.length > 1 ? `, as do its other ${effects.length - 1} outputs` : '';
+  return { uses: last.timesToFire, reason: `${last.output} → ${last.target} ${last.input} fires ${last.timesToFire === 1 ? 'only once' : `${last.timesToFire} times`}${others}` };
 }
 
 /**
@@ -123,7 +129,7 @@ export function suggestHandler(e: MapEntity, graph?: EntityGraph): HandlerSugges
       s.cooldownReason = cd.reason;
       if (s.mode === 1) s.mode = 2;
     }
-    const limit = fireLimit(e, s.event);
+    const limit = fireLimit(graph, e, s.event);
     const once = limit ? null : usedUp(graph, e, s.event);
     if (limit) {
       s.maxuses = limit.uses;

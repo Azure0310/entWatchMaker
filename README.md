@@ -143,10 +143,10 @@ GFL 設定もこうした counter を持つアイテムの 40 件中 34 件が�
 手前の relay / branch の代わりにハンドラにします。こちらは counter 自身が使用を通知する（mode 3）ので、ボタンは +use のフックのままです。
 ただし counter を増減させるのがアイテムの使用とタイマーだけのときに限ります（ボスの HP counter が倒れたときにアイテムを止める形は除きます）。
 
-**使用回数**: ハンドラ自身の出力が N 回しか発火しない（Hammer の Only once）ときは mode 3 / maxuses N にします。
+**使用回数**: ハンドラ自身の、効果のある出力がすべて N 回しか発火しない（Hammer の Only once）ときは mode 3 / maxuses N にします（初回だけの音や一度きりの補正が 1 本あるだけでは制限しません）。
 使用から 15 秒以内に、ハンドラかそのボタンを Kill する、または Lock / Disable してマップのどこからも Unlock / Enable しない
 アイテムは使い切り（mode 3 / maxuses 1）です。拾ったときの trigger_once など一度しか発火しない Unlock は使用前の準備なので数えません。
-別のエンティティの分岐（ランダムな case の一部の結果）や、手前にあるステージのボタンが後で自分を Kill するのは使い切りではありません。
+別のエンティティの分岐（ランダムな case の一部の結果）、physbox が壊れたとき（OnBreak）の Kill、手前にあるステージのボタンが後で自分を Kill するのは使い切りではありません。
 出力の無いボタンでも、アイテムのロジックが Lock / Unlock しているもの（ze_santassination_p）は +use のフックとして残します。
 後ろに filter / relay などのハンドラがあるアイテムのボタンは +use のフックだけにしますが、自分のクールダウンや使用回数を持ち、
 後ろのハンドラにつながっていないボタン（別のボタンの攻撃とは別の必殺技、game_ui のキーとは別に OnUser4 で数えるボタン）は
@@ -417,7 +417,7 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   none of them (0 of 44 on the evaluated maps).
 - Button → filter → relay / counter: a filter that only checks the user and hands the use on to relays / cases /
   counters is replaced by those (as in most GFL configs); a filter with effects of its own stays, unless it counts an
-  item-specific `math_counter`, which then reports the use. An output that fires only N times gives mode 3 / maxuses N.
+  item-specific `math_counter`, which then reports the use. When every output doing something fires only N times, that gives mode 3 / maxuses N (a one-off on the side, like the first use's sound, does not).
   A button without outputs that the item's logic locks and unlocks is still the +use hook. Buttons become plain +use
   hooks when a filter / relay / counter handler follows; one with a cooldown or uses of its own that no follow-up hangs
   on (a special beside the attack behind another button, a button counting on OnUser4 beside a game_ui key) keeps
@@ -438,7 +438,8 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
 - Single use: when, within 15 s of the use and not through another entity's choice, the use kills the handler or its
   button, or locks / disables it and nothing in the map unlocks / enables it again, the item gets mode 3 / maxuses 1.
   An Unlock that can fire only once (the pickup trigger_once, an "only once" output) arms the item before its use and
-  does not count; a random case outcome or a stage button that kills itself later is not a single use.
+  does not count; a random case outcome, a kill on a physbox breaking (OnBreak) or a stage button that kills itself
+  later is not a single use.
 - Workshop packages holding several maps (3D skybox, `maps/stages/…`) are read through the map right under `maps/`
   that is not a skybox and has the most entity data, not the biggest file.
 - Accuracy: `npm run evaluate -- <CS2-ZE-Configs/entwatch> <workshop/content/730 or map folders> --out eval` compares

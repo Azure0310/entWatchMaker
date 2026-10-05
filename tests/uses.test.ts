@@ -92,6 +92,53 @@ describe('single-use items', () => {
   });
 });
 
+describe('outputs that fire only once', () => {
+  const turret = (soundOnly: boolean) =>
+    graphWith((mk, c) => [
+      mk('point_template', 'turret_template', '300', { template01: 'turret_wpn', template02: 'turret_button', template03: 'turret_filter' }),
+      mk('weapon_elite', 'turret_wpn', '1110', { origin: '0 0 0' }),
+      mk('func_button', 'turret_button', '1111', { parentname: 'turret_wpn', wait: '1' }, [c('OnPressed', 'turret_filter', 'TestActivator')]),
+      mk('filter_multi', 'turret_filter', '6117', {}, [
+        c('OnPass', 'turret_fire', 'Trigger', '', 0, soundOnly ? -1 : 1),
+        c('OnPass', 'turret_sound', 'StartSound', '', 0, 1),
+        c('OnPass', 'turret_break', 'Trigger', '', 35, soundOnly ? -1 : 1),
+      ]),
+      mk('logic_relay', 'turret_fire', '6119', {}, [c('OnTrigger', 'turret_gun', 'Enable')]),
+      mk('logic_relay', 'turret_break', '6120', {}, [c('OnTrigger', 'turret_gun', 'Kill')]),
+      mk('point_soundevent', 'turret_sound', '6121', {}),
+      mk('trigger_hurt', 'turret_gun', '6122', { startdisabled: '1' }),
+    ]);
+
+  it('does not limit the uses for a one-off on the side (the first use sound)', () => {
+    const { graph, byName } = turret(true);
+    const { item } = suggestItemForWeapon(byName('turret_wpn'), graph);
+    expect(handler(item, '6117')?.maxuses ?? 0).toBe(0);
+  });
+
+  it('limits them when every output doing something fires only once', () => {
+    const { graph, byName } = turret(false);
+    const { item } = suggestItemForWeapon(byName('turret_wpn'), graph);
+    expect(handler(item, '6117')).toMatchObject({ mode: 3, maxuses: 1 });
+  });
+
+  it('does not take a physbox breaking for a use that kills the relay', () => {
+    const { graph, byName } = graphWith((mk, c) => [
+      mk('point_template', 'troll_template', '300', { template01: 'troll_knife', template02: 'troll_ui', template03: 'troll_relay', template04: 'troll_phbox' }),
+      mk('weapon_knife', 'troll_knife', '29179', { origin: '0 0 0' }, [c('OnPlayerPickup', 'troll_ui', 'Activate')]),
+      mk('logic_case', 'troll_ui', '29180', { vscripts: 'game_ui', case16: 'PressedAttack2' }, [c('OnCase16', 'troll_relay', 'Trigger')]),
+      mk('logic_relay', 'troll_relay', '29185', {}, [
+        c('OnTrigger', 'troll_phbox', 'AddHealth', '1500'),
+        c('OnTrigger', '!self', 'Disable'),
+        c('OnTrigger', '!self', 'Enable', '', 35),
+      ]),
+      // the troll's body: when it breaks, the troll is dead and its ability goes
+      mk('func_physbox', 'troll_phbox', '29186', { parentname: 'troll_knife' }, [c('OnBreak', 'troll_relay', 'Kill')]),
+    ]);
+    const { item } = suggestItemForWeapon(byName('troll_knife'), graph);
+    expect(handler(item, '29185')).toMatchObject({ mode: 2, cooldown: 35 });
+  });
+});
+
 describe('a template mate the chain reaches late', () => {
   it('takes the relay behind filter → compare even when the template listed it first', () => {
     const { graph, byName } = graphWith((mk, c) => [
