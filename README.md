@@ -295,13 +295,14 @@ npm run evaluate -- <CS2-ZE-Configs/entwatch> "C:\Program Files (x86)\Steam\stea
 Workshop コレクションの ID 一覧など。1 行 1 件、タブ区切りなら 1 列目）のフォルダ、なければ設定の hammerid が多く見つかるほうです。
 
 report.md 先頭の「ゲーム内で設定と同じ動きをするアイテム」は、CS2Fixes での動作で比べた指標です。ボタン単独で数えるか、
-ボタンのフック + 後段のフィルタ / リレーで数えるかといった書き方だけの違いは同じとみなし、次を確かめます:
+ボタンのフック + 後段のフィルタ / リレーで数えるかといった書き方だけの違いは同じとみなします（GFL が同じボタンを「+use のフックだけ」と
+「その OnUser1 / OnUser4 で数える行」の 2 行で書いたものも、CS2Fixes では 1 つの button ハンドラと同じなので 1 つにまとめて比べます）。次を確かめます:
 GFL がフックするボタンをフックしているか（CS2Fixes は button ハンドラで持ち主以外の +use を止めます）、GFL の各ハンドラに
 同じ使用で発火する相手があり余分なハンドラが無いか、チャット通知が同じか（mode 5 の counter は通知しません）、
 アイテムが HUD に出るか（CS2Fixes は ui のどれかが有効なら 1 行出します。GFL の `"counter"`（mode 6）は counter の表示として比べます）、
 cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同じ扱い）、使用回数、triggers（CS2Fixes と同じくマップ全体で比べます）。
 「What differs in game」の表に、残っている違いの種類ごとの件数が出ます。ヒューリスティクスを変えたときはこの数字で
-良くなったか確かめてください（2026-10 時点の 186 マップで、ゲーム内で同じ動き 74%、完全一致 55%）。
+良くなったか確かめてください（2026-10 時点の 186 マップで、ゲーム内で同じ動き 76%、完全一致 56%）。
 
 `tests/diagnostics.test.ts` は、`dump:entities` で書き出した ze_tesv_skyrim_p / ze_lotr_minas_tirith_p の JSON
 （`skyrim.entities.json` / `minas.entities.json`）を置いたフォルダを `DIAG_DUMP_DIR` で指すと、GFL 設定のハンドラ / トリガーを
@@ -439,13 +440,14 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   several folders is evaluated once, from the upload listed in `--prefer ids.tsv` or else where most config ids are
   found. The headline
   metric is whether an item would behave like the config in CS2Fixes: per-author style is accepted (counting the button
-  itself vs. a plain button hook plus the filter / relay behind it), and it checks that the buttons GFL hooks are hooked
+  itself vs. a plain button hook plus the filter / relay behind it; a button GFL writes twice, as a plain hook and as an
+  entry counting its OnUser1 / OnUser4, is the one button handler CS2Fixes needs), and it checks that the buttons GFL hooks are hooked
   (CS2Fixes blocks other players' +use on them), every GFL handler has a counterpart firing on the same use and there
   are no extra ones, uses are announced alike (a counter in mode 5 never announces), the item is on the HUD when GFL
   puts it there (CS2Fixes shows one line per item; GFL's `"type": "counter"` / `"mode": 6`, which CS2Fixes does not
   know, is compared as the counter display it is meant to be), the cooldown is within 1 s (2 s or less counts as none),
-  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026, 186 maps: 74% behave the same
-  in game, 55% are identical; "What differs in game" lists the rest by kind.
+  the max uses and the triggers (over the whole map, as CS2Fixes hooks them). Oct 2026, 186 maps: 76% behave the same
+  in game, 56% are identical; "What differs in game" lists the rest by kind.
 - Map updates: CS2Fixes matches entities by hammerid only, so the tool remembers the classname / targetname behind
   each id (from the loaded map and from the comments it writes into the jsonc) and offers "Re-match by name" when a
   newer map version no longer contains those ids.

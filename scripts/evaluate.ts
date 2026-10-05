@@ -168,6 +168,24 @@ function fires(graph: EntityGraph, a: MapEntity, b: MapEntity, hops = 2): boolea
 
 /** A +use hook only: no event, no message, no HUD (the handlers behind it report the use). */
 const isPlainHook = (h: HandlerConfig) => h.type === 'button' && h.mode <= 1 && !h.event && !h.message && !h.ui;
+
+/**
+ * GFL sometimes writes a button twice: a plain +use hook, and a second entry on the same entity
+ * counting the uses on its OnUser1 / OnUser4 (39 items). CS2Fixes does both with one button
+ * handler (it hooks +use and counts on the handler's event), so they are compared as that one.
+ */
+function mergeButtonEntries(item: ItemConfig): ItemConfig {
+  const handlers: HandlerConfig[] = [];
+  for (const h of item.handlers) {
+    const hook = isPlainHook(h) ? undefined : handlers.find((o) => o.hammerid === h.hammerid && isPlainHook(o));
+    if (hook) handlers[handlers.indexOf(hook)] = { ...h, type: 'button' };
+    else if (isPlainHook(h) && handlers.some((o) => o.hammerid === h.hammerid)) {
+      const i = handlers.findIndex((o) => o.hammerid === h.hammerid);
+      handlers[i] = { ...handlers[i], type: 'button' };
+    } else handlers.push(h);
+  }
+  return { ...item, handlers };
+}
 /** A counter shown on the HUD; GFL's "counter" (mode 6, unknown to CS2Fixes) is meant as one too. */
 const isCounterType = (h: HandlerConfig) => h.type === 'counterup' || h.type === 'counterdown' || h.typeRaw === 'counter';
 /** CS2Fixes prints a use in chat when `message` is on, except for a counter in mode 5 (it only shows the value). */
@@ -376,6 +394,7 @@ function evaluateMap(folder: string, map: ParsedMap, loaderPick: string | undefi
     skipped.push({ folder, reason: `config parse failed: ${(err as Error).message}` });
     return;
   }
+  config.items = config.items.map(mergeButtonEntries);
   const graph = new EntityGraph(map.entities);
   const tools = config.items.map((it) => {
     const weapon = weaponOf(graph, it);
