@@ -194,8 +194,9 @@ const announces = (h: HandlerConfig) => h.message && !(isCounterType(h) && h.mod
  * The cooldown CS2Fixes shows / waits for in the handler's mode. Up to 2 s it makes no difference
  * in game: the 1 s leeway lets every use message through and the HUD barely shows it.
  */
+const modeCooldown = (h: HandlerConfig) => ([2, 3, 4].includes(h.mode) ? (h.cooldown ?? 0) : 0);
 const shownCooldown = (h: HandlerConfig) => {
-  const cd = [2, 3, 4].includes(h.mode) ? (h.cooldown ?? 0) : 0;
+  const cd = modeCooldown(h);
   return cd <= 2 ? 0 : cd;
 };
 
@@ -228,6 +229,7 @@ function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig, m
   const gIds = new Set(cfg.handlers.map((h) => h.hammerid));
   const used = new Set<string>();
   const pairs: [HandlerConfig, HandlerConfig][] = [];
+  const unmatched: HandlerConfig[] = [];
   for (const h of cfg.handlers) {
     let t = tool.handlers.find((x) => x.hammerid === h.hammerid && !used.has(x.hammerid));
     if (!t) {
@@ -239,11 +241,25 @@ function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig, m
       });
     }
     if (!t) {
-      problems.push(`GFL handler has no counterpart: ${h.hammerid}`);
+      unmatched.push(h);
       continue;
     }
     used.add(t.hammerid);
     pairs.push([h, t]);
+  }
+  // The same style difference the other way round: GFL hooks the button and counts the filter /
+  // relay its press fires, the tool counts the button itself. That button reports the follow-up's
+  // use, and the GFL hook paired with it only needs it hooked (checked below).
+  const hookOnly = new Set<HandlerConfig>();
+  for (const h of unmatched) {
+    const he = get(h.hammerid);
+    const pair = pairs.find(([g, t]) => isPlainHook(g) && t.type === 'button' && !isPlainHook(t) && !!he && !!get(g.hammerid) && fires(graph, get(g.hammerid)!, he));
+    if (!pair) {
+      problems.push(`GFL handler has no counterpart: ${h.hammerid}`);
+      continue;
+    }
+    hookOnly.add(pair[0]);
+    pairs.push([h, pair[1]]);
   }
   // the follow-up of a plain +use hook reports the use the GFL button handler reports
   const followUps = tool.handlers.filter((x) => {
@@ -259,6 +275,7 @@ function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig, m
     if (h.type === 'button' && !tool.handlers.some((x) => x.hammerid === h.hammerid && x.type === 'button')) problems.push(`button not hooked: ${h.hammerid}`);
   }
   for (const [h, t] of pairs) {
+    if (hookOnly.has(h)) continue;
     // a plain +use hook leaves the message / HUD / numbers to the handlers its press fires
     const plain = isPlainHook(t);
     const te = get(t.hammerid);
@@ -269,7 +286,10 @@ function inGameProblems(graph: EntityGraph, cfg: ItemConfig, tool: ItemConfig, m
     if (!counters && h.hammerid === carrier.hammerid && h.event && carrier.event && h.event.toLowerCase() !== carrier.event.toLowerCase()) problems.push(`event: ${h.hammerid}`);
     const gc = shownCooldown(h);
     const tc = shownCooldown(carrier);
-    if (Math.abs(gc - tc) > 1) problems.push(`${gc === 0 ? 'cooldown not in GFL' : tc === 0 ? 'cooldown missing' : 'cooldown differs'}: ${h.hammerid}`);
+    // within CS2Fixes' 1 s leeway either way (2 s against 2.15 s is no difference, although only
+    // the second is above the 2 s that count as none)
+    const rawDiff = Math.abs(modeCooldown(h) - modeCooldown(carrier));
+    if (Math.abs(gc - tc) > 1 && rawDiff > 1) problems.push(`${gc === 0 ? 'cooldown not in GFL' : tc === 0 ? 'cooldown missing' : 'cooldown differs'}: ${h.hammerid}`);
     const gu = shownUses(h);
     const tu = shownUses(carrier);
     if (gu !== tu) problems.push(`${gu === 0 ? 'max uses not in GFL' : tu === 0 ? 'max uses missing' : 'max uses differ'}: ${h.hammerid}`);
