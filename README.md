@@ -142,6 +142,8 @@ GFL 設定もこうした counter を持つアイテムの 40 件中 34 件が�
 使用回数を数え、上限（`OnHitMax` / `OnHitMin`）でボタンを Kill / Lock する counter（地雷・ロケットの弾数）も同じように
 手前の relay / branch の代わりにハンドラにします。こちらは counter 自身が使用を通知する（mode 3）ので、ボタンは +use のフックのままです。
 ただし counter を増減させるのがアイテムの使用とタイマーだけのときに限ります（ボスの HP counter が倒れたときにアイテムを止める形は除きます）。
+上限でボタンではなく押下から続く relay を止めっぱなしにする counter（燃料切れで火炎放射の relay を Disable）も同じ扱いです。
+上限で Disable して後で Enable し直す counter（オーバーヒート）はクールダウンなので、relay をハンドラのままにします。
 
 **使用回数**: ハンドラ自身の、効果のある出力がすべて N 回しか発火しない（Hammer の Only once）ときは mode 3 / maxuses N にします（初回だけの音や一度きりの補正が 1 本あるだけでは制限しません）。
 使用から 15 秒以内に、ハンドラかそのボタンを Kill する、または Lock / Disable してマップのどこからも Unlock / Enable しない
@@ -434,7 +436,9 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   mode 1, no HUD) — "button + counter" is what GFL writes for 34 of the 40 items with such a counter. A counter that
   counts the uses and kills / locks the button at its limit (`OnHitMax` / `OnHitMin`: mines, rockets) replaces them the
   same way but announces the uses itself (mode 3), so the button stays a plain +use hook — as long as only the item's
-  use and timers step it (a boss HP counter that stops the items when the boss dies is not one).
+  use and timers step it (a boss HP counter that stops the items when the boss dies is not one). A counter that at its
+  limit stops the relay the press sets off for good (out of fuel: the flame relay Disabled) counts too; one that
+  disables it and enables it again later (an overheat) is a cooldown and leaves the relay the handler.
 - Single use: when, within 15 s of the use and not through another entity's choice, the use kills the handler or its
   button, or locks / disables it and nothing in the map unlocks / enables it again, the item gets mode 3 / maxuses 1.
   An Unlock that can fire only once (the pickup trigger_once, an "only once" output) arms the item before its use and

@@ -231,6 +231,39 @@ describe('counters that stop the button at their limit', () => {
     expect(item.handlers.map((h) => h.hammerid)).not.toContain('649');
   });
 
+  const flamer = (overheat: boolean) =>
+    graphWith((mk, c) => [
+      mk('point_template', 'lf_template', '300', { template01: 'lf_wpn', template02: 'lf_button', template03: 'lf_relay', template04: 'lf_counter', template05: 'lf_timer' }),
+      mk('weapon_negev', 'lf_wpn', '3828', { origin: '0 0 0' }),
+      mk('func_button', 'lf_button', '3835', { parentname: 'lf_wpn', wait: '1' }, [c('OnPressed', 'lf_relay', 'Trigger')]),
+      mk('logic_relay', 'lf_relay', '3824', {}, [
+        c('OnTrigger', 'lf_timer', 'Enable'),
+        c('OnTrigger', 'lf_timer', 'Disable', '', 4),
+        c('OnTrigger', 'lf_flames', 'Enable'),
+        c('OnTrigger', 'lf_flames', 'Disable', '', 4),
+      ]),
+      mk('trigger_hurt', 'lf_flames', '3826', { startdisabled: '1', parentname: 'lf_wpn' }),
+      mk('logic_timer', 'lf_timer', '3830', { refiretime: '0.5', startdisabled: '1' }, [c('OnTimer', 'lf_counter', 'Add', '1')]),
+      // out of fuel: the flame relay stops for good (or, for an overheat, for 10 s)
+      mk('math_counter', 'lf_counter', '3829', { min: '0', max: '40' }, [
+        c('OnHitMax', 'lf_relay', 'Disable'),
+        ...(overheat ? [c('OnHitMax', 'lf_relay', 'Enable', '', 10), c('OnHitMax', '!self', 'SetValue', '0', 10)] : []),
+      ]),
+    ]);
+
+  it('lists the fuel counter that stops the ability relay for good', () => {
+    const { graph, byName } = flamer(false);
+    const { item } = suggestItemForWeapon(byName('lf_wpn'), graph);
+    expect(item.handlers.map((h) => h.hammerid)).toContain('3829');
+  });
+
+  it('leaves an overheat that only pauses the relay to the relay', () => {
+    const { graph, byName } = flamer(true);
+    const { item } = suggestItemForWeapon(byName('lf_wpn'), graph);
+    expect(item.handlers.map((h) => h.hammerid)).not.toContain('3829');
+    expect(item.handlers.map((h) => h.hammerid)).toContain('3824');
+  });
+
   it('keeps a fuel counter a timer drains', () => {
     const { graph, byName } = graphWith((mk, c) => [
       mk('point_template', 'flame_template', '300', { template01: 'flame_wpn', template02: 'flame_button', template03: 'flame_relay', template04: 'flame_fuel', template05: 'flame_timer' }),

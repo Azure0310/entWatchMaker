@@ -880,10 +880,25 @@ export function suggestItemForWeapon(e: MapEntity, graph: EntityGraph): { item: 
         .incomingConnections(k)
         .filter(({ connection }) => /^(add|subtract)$/i.test(connection.input))
         .every(({ from }) => from.id === k.id || from.classname === 'logic_timer' || firesWithin(graph, button, from, 4));
-    const stops = graph
+    const buttonStops = graph
       .incomingConnections(button)
       .filter(({ from, connection }) => isCounter(from) && (/^(lock|disable)$/i.test(connection.input) || (/^kill(hierarchy)?$/i.test(connection.input) && /^on(hitmax|hitmin)$/i.test(connection.output))));
-    const lockGauge = (k: MapEntity) => !counterUse(graph, k) && stops.some(({ from, connection }) => from.id === k.id && /^(lock|disable)$/i.test(connection.input));
+    // or, at its limit, the ability the press sets off (ze_neron Enidnu: OnHitMin → the ult relay Disable)
+    const chainStops = chosen
+      .map(({ c }) => c.entity)
+      .filter((x) => x.id !== button.id && !isUseEntity(x) && !isCounter(x) && firesWithin(graph, button, x, 4))
+      .flatMap((g) => {
+        const fromCounters = graph.incomingConnections(g).filter(({ from }) => isCounter(from));
+        // for good: an overheat that disables the relay and enables it again later is a cooldown
+        return fromCounters.filter(
+          ({ from, connection }) =>
+            /^on(hitmax|hitmin)$/i.test(connection.output) &&
+            /^(lock|disable|kill|killhierarchy)$/i.test(connection.input) &&
+            !fromCounters.some((o) => o.from.id === from.id && /^(unlock|enable)$/i.test(o.connection.input)),
+        );
+      });
+    const stops = [...buttonStops, ...chainStops];
+    const lockGauge = (k: MapEntity) => !counterUse(graph, k) && buttonStops.some(({ from, connection }) => from.id === k.id && /^(lock|disable)$/i.test(connection.input));
     const limiters = stops
       .map(({ from }) => from)
       .filter((k, i, all) => all.indexOf(k) === i && !!k.hammerId && (lockGauge(k) || ownCounter(k)));
