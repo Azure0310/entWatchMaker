@@ -263,6 +263,21 @@ export function convertLegacyStripper(text: string, target: string = MAIN_LUMP):
       }
       if (t.kind === 'open') fail('Unexpected "{"', t);
       const v = tokens[pos + 1];
+      // VMF-style "connections { ... }" written inside a block: its outputs belong to the block
+      // (and "match: { ... }" written inside a filter block: its key values are the filter's)
+      if (t.kind === 'word' && /^(?:connections|match:)$/i.test(t.text) && v?.kind === 'open') {
+        if (t.text.toLowerCase() === 'match:') warnings.push(`line ${t.line}: "match:" inside a block read as the block's own key values`);
+        pos++;
+        kvs.push(...pairs());
+        continue;
+      }
+      // stray text right after "{" on its line ("{stage_2_door"): Stripper:Source ignored it
+      const prev = tokens[pos - 1];
+      if (t.kind === 'word' && prev?.kind === 'open' && prev.line === t.line) {
+        warnings.push(`line ${t.line}: ignored "${t.text}" after "{"`);
+        pos++;
+        continue;
+      }
       if (t.kind === 'word' && (!v || v.kind !== 'str')) fail(`Unexpected "${t.text}"`, t);
       if (!v || (v.kind !== 'str' && v.kind !== 'word')) fail(`Key "${(t as { text: string }).text}" has no value`, t);
       kvs.push({ key: (t as { text: string }).text, value: (v as { text: string }).text });

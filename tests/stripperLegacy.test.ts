@@ -102,6 +102,28 @@ describe('CS:GO Stripper:Source conversion', () => {
     expect(warnings.some((w) => w.includes('AddOutput'))).toBe(true);
   });
 
+  it('reads what Stripper:Source let through: connections blocks, text after "{", match: inside a filter', () => {
+    const { actions, warnings } = convertLegacyStripper(
+      [
+        'add:\n{\n"classname" "trigger_once"\n"targetname" "t1"\nconnections\n{stage_2_door\n"OnStartTouch" "door,Trigger,,0,-1"\n}\n}',
+        'filter:\n{\nmatch:\n{\n"targetname" "SpawnPush"\n"classname" "trigger_push"\n}\n\n}',
+      ].join('\n'),
+    );
+    const [add, filter] = actions;
+    if (add.kind !== 'add' || filter.kind !== 'filter') throw new Error('kinds');
+    expect(add.keyvalues).toEqual([
+      { key: 'classname', value: 'trigger_once' },
+      { key: 'targetname', value: 't1' },
+    ]);
+    expect(add.io).toEqual([{ outputname: 'OnStartTouch', targetname: 'door', inputname: 'Trigger' }]);
+    expect(filter.match).toEqual([
+      { key: 'targetname', value: 'SpawnPush' },
+      { key: 'classname', value: 'trigger_push' },
+    ]);
+    expect(warnings.some((w) => w.includes('"stage_2_door"'))).toBe(true);
+    expect(warnings.some((w) => w.includes('"match:"'))).toBe(true);
+  });
+
   it('reports where a broken file goes wrong', () => {
     expect(() => convertLegacyStripper('filter:\n{\n"classname" "a"\n')).toThrow(/Missing "}"/);
     expect(() => convertLegacyStripper('{ "classname" "a" }')).toThrow(/before any/);
