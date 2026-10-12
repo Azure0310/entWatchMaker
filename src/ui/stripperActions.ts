@@ -1,5 +1,5 @@
 /** Editing actions for the StripperCS2 side of the tool. */
-import type { EntityConnection, MapEntity } from '../model/entity';
+import { PREFAB_NAME_PREFIX, type EntityConnection, type MapEntity } from '../model/entity';
 import {
   cloneAction,
   newAdd,
@@ -195,7 +195,10 @@ export function startOutputInsert(e: MapEntity): void {
 /** Reads a StripperCS2 jsonc, or converts a CS:GO Stripper:Source .cfg (detected from the text). */
 export function importStripperText(text: string, target: string, mode: 'replace' | 'append'): { count: number; warnings: string[]; legacy: boolean } {
   const legacy = isLegacyStripperText(text);
-  const { actions, warnings } = legacy ? convertLegacyStripper(text, target) : parseStripperFile(text, target);
+  // a map compiled with prefab-decorated names ("[PR#]name") needs name matches that accept them
+  const prefabNames = store.get().map?.entities.some((e) => e.targetname.toUpperCase().startsWith(PREFAB_NAME_PREFIX)) ?? false;
+  const { actions, warnings } = legacy ? convertLegacyStripper(text, target, { prefabNames }) : parseStripperFile(text, target);
+  if (legacy && prefabNames) warnings.unshift('names are matched with or without the "[PR#]" prefix / "&0000" suffix the loaded map uses');
   setStripper((c) => ({
     actions: mode === 'replace' ? [...c.actions.filter((a) => a.target !== target), ...actions] : [...c.actions, ...actions],
   }));

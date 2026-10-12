@@ -14,7 +14,7 @@
  *  - AddOutput that adds an output ("OnX target:input:param:delay:times") is not vanilla CS2
  */
 
-import { MAIN_LUMP, exactValue, isRegexValue, newAdd, newFilter, newModify, type IoSpec, type KV, type ModifyAction, type StripperAction } from './stripper';
+import { MAIN_LUMP, escapeRegex, exactValue, isRegexValue, newAdd, newFilter, newModify, type IoSpec, type KV, type ModifyAction, type StripperAction } from './stripper';
 
 type Token = { kind: 'str'; text: string; line: number } | { kind: 'word'; text: string; line: number } | { kind: 'open' | 'close'; line: number };
 
@@ -96,11 +96,38 @@ export interface LegacyConversion {
   warnings: string[];
 }
 
+export interface LegacyOptions {
+  /**
+   * The map writes entity names the way the CS2 compiler decorates them ("[PR#]name", and
+   * "[PR#]name&0000" in a point_template's lump): names that select entities or outputs (filter,
+   * match, delete) then accept the decorated form too. Names written by add / insert / replace stay
+   * as they are, since references in the game use the plain name.
+   */
+  prefabNames?: boolean;
+}
+
 interface Ctx {
   /** Warnings for the action being converted (also written to its note). */
   notes: Set<string>;
   where: string;
   warnings: string[];
+  prefab: boolean;
+}
+
+/** Keys whose value names an entity. */
+const NAME_KEYS = /^(?:targetname|parentname|target|filtername|damagefilter|entitytemplate|template\d\d)$/i;
+
+/** A name selector that also accepts the compiler's "[PR#]" prefix and "&0000" suffix. */
+function prefabName(value: string): string {
+  if (isRegexValue(value)) {
+    let inner = value.slice(1, -1);
+    if (inner.startsWith('^')) inner = `^(?:\\[PR#\\])?${inner.slice(1)}`;
+    if (inner.endsWith('$') && !inner.endsWith('\\$')) inner = `${inner.slice(0, -1)}(?:&\\d{4})?$`;
+    return `/${inner}/`;
+  }
+  // "!self" / "!activator" and the like are not entity names
+  if (value === '' || value.startsWith('!')) return exactValue(value);
+  return `/^(?:\\[PR#\\])?${escapeRegex(value)}(?:&\\d{4})?$/`;
 }
 
 function warn(ctx: Ctx, msg: string): void {
@@ -127,7 +154,8 @@ function outputToIo(key: string, value: string, full: boolean, ctx: Ctx): IoSpec
       const io: IoSpec = { outputname: key };
       const field = (p: string): string | undefined => (CATCH_ALL.has(p) ? undefined : `/^(?:${p})$/`);
       const [target, input, param, delay, times] = parts;
-      if (field(target)) io.targetname = field(target);
+      const t = field(target);
+      if (t) io.targetname = ctx.prefab && !full ? prefabName(t) : t;
       if (field(input)) io.inputname = field(input);
       if (field(param)) io.overrideparam = field(param);
       if (numberOf(delay) !== undefined) io.delay = numberOf(delay);
@@ -138,7 +166,11 @@ function outputToIo(key: string, value: string, full: boolean, ctx: Ctx): IoSpec
     return { outputname: key };
   }
   const [target, input, param, delay, times] = splitOutput(value).map((p) => p.trim());
-  const io: IoSpec = { outputname: key, targetname: full ? target : exactValue(target), inputname: full ? input : exactValue(input) };
+  const io: IoSpec = {
+    outputname: key,
+    targetname: full ? target : ctx.prefab ? prefabName(target) : exactValue(target),
+    inputname: full ? input : exactValue(input),
+  };
   const d = numberOf(delay) ?? 0;
   const t = Math.trunc(numberOf(times) ?? -1);
   if (full) {
@@ -203,7 +235,10 @@ function splitBlock(kvs: KV[], full: boolean, ctx: Ctx): { kvs: KV[]; io: IoSpec
   for (const kv of kvs) {
     const regex = isRegexValue(kv.value);
     if (isOutputKey(kv.key) && (regex ? true : isOutputValue(kv.value))) io.push(outputToIo(kv.key, kv.value, full, ctx));
-    else out.push(convertKv(kv, ctx));
+    else {
+      const c = convertKv(kv, ctx);
+      out.push(!full && ctx.prefab && NAME_KEYS.test(c.key) ? { key: c.key, value: prefabName(c.value) } : c);
+    }
   }
   return { kvs: out, io };
 }
@@ -221,7 +256,7 @@ const SUBSECTIONS = ['match', 'replace', 'delete', 'insert'] as const;
 type Subsection = (typeof SUBSECTIONS)[number];
 
 /** Converts a whole Stripper:Source config into StripperCS2 actions for `target`. */
-export function convertLegacyStripper(text: string, target: string = MAIN_LUMP): LegacyConversion {
+export function convertLegacyStripper(text: string, target: string = MAIN_LUMP, opts: LegacyOptions = {}): LegacyConversion {
   const tokens = tokenize(text);
   const warnings: string[] = [];
   const actions: StripperAction[] = [];
@@ -337,7 +372,7 @@ export function convertLegacyStripper(text: string, target: string = MAIN_LUMP):
     if (t.kind === 'open') {
       if (!section) fail('A block before any "filter:" / "add:" / "modify:"', t);
       const s = section as Section;
-      const ctx: Ctx = { notes: new Set(), where: `${s}[${count[s]}]`, warnings };
+      const ctx: Ctx = { notes: new Set(), where: `${s}[${count[s]}]`, warnings, prefab: opts.prefabNames ?? false };
       count[s]++;
       let action: StripperAction;
       if (s === 'modify') {

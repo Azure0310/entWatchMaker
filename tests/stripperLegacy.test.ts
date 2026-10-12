@@ -124,6 +124,35 @@ describe('CS:GO Stripper:Source conversion', () => {
     expect(warnings.some((w) => w.includes('"match:"'))).toBe(true);
   });
 
+  it('matches names with or without the "[PR#]" / "&0000" decorations when asked, writing names as they are', () => {
+    const cfg = [
+      'filter:\n{\n"targetname" "SpawnPush"\n"classname" "trigger_push"\n}',
+      'remove:\n{\n"targetname" "/^item_.*_2$/"\n}',
+      'modify:\n{\nmatch:\n{\n"targetname" "logica.extreme"\n}\ndelete:\n{\n"OnTrigger" "ExtSBars,Kill,,0,-1"\n"OnUser1" "!self,Kill,,0,-1"\n}\ninsert:\n{\n"OnTrigger" "stage_1_catapults,Trigger,,25,-1"\n}\n}',
+      'add:\n{\n"targetname" "fixstage1"\n"parentname" "door"\n}',
+    ].join('\n');
+    const [f1, f2, mod, add] = convertLegacyStripper(cfg, 'default_ents', { prefabNames: true }).actions;
+    if (f1.kind !== 'filter' || f2.kind !== 'filter' || add.kind !== 'add' || mod.kind !== 'modify') throw new Error('kinds');
+    expect(f1.match).toEqual([
+      { key: 'targetname', value: '/^(?:\\[PR#\\])?SpawnPush(?:&\\d{4})?$/' },
+      { key: 'classname', value: 'trigger_push' },
+    ]);
+    expect(f2.match).toEqual([{ key: 'targetname', value: '/^(?:\\[PR#\\])?item_.*_2(?:&\\d{4})?$/' }]);
+    expect(mod.match).toEqual([{ key: 'targetname', value: '/^(?:\\[PR#\\])?logica\\.extreme(?:&\\d{4})?$/' }]);
+    expect(mod.deleteIo.map((io) => io.targetname)).toEqual(['/^(?:\\[PR#\\])?ExtSBars(?:&\\d{4})?$/', '!self']);
+    expect(mod.insertIo[0].targetname).toBe('stage_1_catapults');
+    expect(add.keyvalues).toEqual([
+      { key: 'targetname', value: 'fixstage1' },
+      { key: 'parentname', value: 'door' },
+    ]);
+
+    const re = new RegExp(f1.match[0].value.slice(1, -1), 'i');
+    expect(['[PR#]SpawnPush', 'SpawnPush', '[PR#]spawnpush&0000'].every((n) => re.test(n))).toBe(true);
+    expect(re.test('SpawnPush2')).toBe(false);
+    // off by default
+    expect(convertLegacyStripper(cfg).actions[0]).toMatchObject({ match: [{ key: 'targetname', value: 'SpawnPush' }, { key: 'classname', value: 'trigger_push' }] });
+  });
+
   it('reports where a broken file goes wrong', () => {
     expect(() => convertLegacyStripper('filter:\n{\n"classname" "a"\n')).toThrow(/Missing "}"/);
     expect(() => convertLegacyStripper('{ "classname" "a" }')).toThrow(/before any/);
