@@ -30,6 +30,7 @@ import {
 } from '../model/stripperBuild';
 import { applyCandidate, findCandidates, type Candidate, type CandidateResult } from '../model/stripperCandidates';
 import { convertLegacyStripper, isLegacyStripperText } from '../model/stripperLegacy';
+import { applyGroupTranslation, applyTranslationTable, parseTranslationTable, type TextGroup } from '../model/stripperText';
 import { showToast } from './actions';
 import { MODE_KEY, store, type AppMode } from './store';
 import { refreshStripperSim, setStripper } from './stripperState';
@@ -247,4 +248,25 @@ export function describeAction(a: StripperAction): string {
     ...ioList(a.insertIo, '+'),
   ];
   return ops.length > 0 ? `${match} ⇒ ${ops.join(', ')}` : match;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Translating the map's text
+// ---------------------------------------------------------------------------------------------
+
+/** Sets the translation of every place a text appears; an empty translation removes it. */
+export function translateText(group: TextGroup, translation: string): void {
+  setStripper((c) => applyGroupTranslation(c, group, translation, mapName()));
+}
+
+/** Applies a translation table (JSON object or tab separated lines); returns how many texts it set. */
+export function importTranslations(text: string, groups: TextGroup[]): number {
+  const table = parseTranslationTable(text);
+  let applied = 0;
+  setStripper((c) => {
+    const result = applyTranslationTable(c, groups, table, mapName());
+    applied = result.applied;
+    return result.config;
+  });
+  return applied;
 }
