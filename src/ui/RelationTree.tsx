@@ -5,6 +5,7 @@ import { addHandler, addTrigger, selectEntity, setTreeDepth, setTreeRoot } from 
 import { useAppState } from './store';
 import { useT } from './useT';
 import { IoSearch } from './IoSearch';
+import { TextScan } from './TextScan';
 import { removeEntity } from './stripperActions';
 
 const KIND_ICON: Record<RelationKind, string> = {
@@ -83,8 +84,10 @@ function Node({ node, usedIds, selectedId, itemUid }: { node: TreeNode; usedIds:
 
 export function RelationTree() {
   const t = useT();
-  const { graph, treeRootId, treeDepth, selectedEntityId, config, selectedItemUid } = useAppState();
-  const [tab, setTab] = useState<'tree' | 'io'>('tree');
+  const { graph, treeRootId, treeDepth, selectedEntityId, config, selectedItemUid, mode } = useAppState();
+  const [tabState, setTab] = useState<'tree' | 'io' | 'text'>('tree');
+  // the text tab makes stripper actions, so it only exists in stripper mode
+  const tab = tabState === 'text' && mode !== 'stripper' ? 'tree' : tabState;
   const root = graph && treeRootId !== null ? graph.byId.get(treeRootId) ?? null : null;
   const tree = useMemo(() => (graph && root ? buildRelationTree(graph, root, treeDepth) : null), [graph, root, treeDepth]);
   const usedIds = useMemo(() => {
@@ -107,6 +110,11 @@ export function RelationTree() {
           <button type="button" className={tab === 'io' ? 'on' : ''} onClick={() => setTab('io')} data-testid="tab-io">
             {t('io.title')}
           </button>
+          {mode === 'stripper' && (
+            <button type="button" className={tab === 'text' ? 'on' : ''} onClick={() => setTab('text')} data-testid="tab-text">
+              {t('tx.title')}
+            </button>
+          )}
         </div>
         {tab === 'tree' && (
           <label className="inline">
@@ -127,8 +135,10 @@ export function RelationTree() {
           {!tree && <div className="muted pad">{t('tree.empty')}</div>}
           {tree && <Node node={tree} usedIds={usedIds} selectedId={selectedEntityId} itemUid={selectedItemUid} />}
         </div>
-      ) : (
+      ) : tab === 'io' ? (
         <IoSearch />
+      ) : (
+        <TextScan />
       )}
     </div>
   );
