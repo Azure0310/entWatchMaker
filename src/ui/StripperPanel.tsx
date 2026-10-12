@@ -1,20 +1,24 @@
 import { useMemo } from 'react';
 import { GLOBAL_LUMP, GLOBAL_MAP, activeTargets, targetsOfEntities, type KV, type StripperAction } from '../model/stripper';
 import { availableStrategies, type MatchStrategy } from '../model/stripperBuild';
+import { findCandidates, type Signal } from '../model/stripperCandidates';
 import type { StripperIssue } from '../model/stripperValidate';
 import type { StringKey } from './i18n';
 import { EntityChip } from './EntityChip';
-import { selectEntity } from './actions';
+import { selectEntity, showToast } from './actions';
 import { IoListEditor, IoRow, KvEditor } from './StripperEditors';
 import {
   addBlankAction,
+  applyCandidateTo,
   applyMatchStrategy,
+  applySureCandidates,
   clearStripper,
   describeAction,
   duplicateAction,
   moveAction,
   removeAction,
   selectAction,
+  unmatchedWithCandidates,
   updateAction,
 } from './stripperActions';
 import { useAppState } from './store';
@@ -69,6 +73,80 @@ function MatchBar({ uid }: { uid: string }) {
   );
 }
 
+function SignalTag({ s }: { s: Signal }) {
+  const t = useT();
+  switch (s.kind) {
+    case 'name':
+      return <span className="sig ok">{t('st.cand.sig.name')}</span>;
+    case 'id':
+      return <span className="sig ok">{t('st.cand.sig.id')}</span>;
+    case 'origin':
+      return <span className={`sig ${s.distance < 64 ? 'ok' : 'warn'}`}>{t('st.cand.sig.origin', { d: Math.round(s.distance) })}</span>;
+    case 'class':
+      if (s.same) return <span className="sig ok">{t('st.cand.sig.class')}</span>;
+      return <span className={`sig ${s.known ? 'warn' : 'ng'}`}>{t(s.known ? 'st.cand.sig.classRenamed' : 'st.cand.sig.classDiffers', { from: s.from, to: s.to })}</span>;
+    case 'io':
+      return <span className={`sig ${s.ok ? 'ok' : 'ng'}`}>{t(s.ok ? 'st.cand.sig.ioOk' : 'st.cand.sig.ioNg')}</span>;
+    case 'key':
+      return <span className={`sig ${s.ok ? 'ok' : 'ng'}`}>{t(s.ok ? 'st.cand.sig.keyOk' : 'st.cand.sig.keyNg', { key: s.key })}</span>;
+  }
+}
+
+/** For an action that selects nothing: the entities of the loaded map it probably meant. */
+function CandidateList({ a }: { a: StripperAction }) {
+  const t = useT();
+  const { graph } = useAppState();
+  const result = useMemo(() => (graph ? findCandidates(a, graph) : null), [a, graph]);
+  if (!result) return null;
+  return (
+    <Section title={t('st.cand.title')} hint={t('st.cand.hint')}>
+      {result.candidates.length === 0 && <div className="muted small">{t('st.cand.none')}</div>}
+      <ul className="cand-list" data-testid="candidates">
+        {result.candidates.map((c) => (
+          <li key={c.entity.id} className={c === result.sure ? 'sure' : ''}>
+            <EntityChip entity={c.entity} onClick={() => selectEntity(c.entity.id, true)} />
+            <span className="muted small mono">{c.entity.source.container}</span>
+            {c === result.sure && <span className="sig sure">{t('st.cand.sure')}</span>}
+            {c.signals.map((s, i) => (
+              <SignalTag key={i} s={s} />
+            ))}
+            <button type="button" className="mini pick" onClick={() => applyCandidateTo(a.uid, c)} title={t('st.cand.by', { s: t(STRATEGY_LABEL[c.strategy]) })} data-testid="candidate-apply">
+              {t('st.cand.apply')}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+/** How many actions select nothing, and a button to rewrite the ones with a sure candidate. */
+function UnmatchedBar() {
+  const t = useT();
+  const { stripper, stripperSim, graph } = useAppState();
+  const list = useMemo(() => unmatchedWithCandidates(), [stripper, stripperSim, graph]);
+  if (list.length === 0) return null;
+  const sure = list.filter((x) => x.result.sure).length;
+  return (
+    <div className="unmatched-bar small" data-testid="unmatched-bar">
+      <span>{t('st.cand.bulk', { n: list.length, k: sure })}</span>
+      {sure > 0 && (
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            if (!window.confirm(t('st.cand.bulkConfirm', { k: sure }))) return;
+            showToast(t('st.cand.bulkDone', { k: applySureCandidates() }));
+          }}
+          data-testid="apply-sure"
+        >
+          {t('st.cand.bulkApply')}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ActionBody({ a, targets, keyHints }: { a: StripperAction; targets: string[]; keyHints: string[] }) {
   const t = useT();
   const { stripperSim } = useAppState();
@@ -106,6 +184,8 @@ function ActionBody({ a, targets, keyHints }: { a: StripperAction; targets: stri
           </Section>
         </>
       )}
+
+      {(a.kind === 'filter' || a.kind === 'modify') && result?.matched === 0 && <CandidateList a={a} />}
 
       {(a.kind === 'filter' || a.kind === 'modify') && (
         <>
@@ -254,6 +334,7 @@ export function StripperPanel({ issues }: { issues: StripperIssue[] }) {
       </div>
       <div className="panel-body config-body">
         <div className="notes small muted">{t('st.order')}</div>
+        <UnmatchedBar />
         {stripper.actions.length === 0 && <div className="muted pad">{t('st.empty')}</div>}
         {stripper.actions.map((a) => (
           <ActionCard key={a.uid} a={a} selected={a.uid === selectedActionUid} issues={issues.filter((i) => i.actionUid === a.uid)} targets={targets} keyHints={keyHints} />

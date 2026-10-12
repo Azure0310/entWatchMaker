@@ -1,5 +1,5 @@
 /** Editing actions for the StripperCS2 side of the tool. */
-import type { EntityConnection, MapEntity } from '../model/entity';
+import { PREFAB_NAME_PREFIX, type EntityConnection, type MapEntity } from '../model/entity';
 import {
   cloneAction,
   newAdd,
@@ -28,6 +28,8 @@ import {
   buildMatch,
   type MatchStrategy,
 } from '../model/stripperBuild';
+import { applyCandidate, findCandidates, type Candidate, type CandidateResult } from '../model/stripperCandidates';
+import { convertLegacyStripper, isLegacyStripperText } from '../model/stripperLegacy';
 import { applyGroupTranslation, applyTranslationTable, parseTranslationTable, type TextGroup } from '../model/stripperText';
 import { showToast } from './actions';
 import { MODE_KEY, store, type AppMode } from './store';
@@ -121,6 +123,29 @@ export function applyMatchStrategy(uid: string, entity: MapEntity, strategy: Mat
   updateAction(uid, (a) => (a.kind === 'add' ? a : { ...a, match }));
 }
 
+/** Points the action at a candidate of the loaded map (match, lump, the old match kept in the note). */
+export function applyCandidateTo(uid: string, c: Candidate): void {
+  updateAction(uid, (a) => (a.kind === 'add' ? a : applyCandidate(a, c, mapName())));
+}
+
+/** Filters / modifies that select nothing in the loaded map, with what they probably meant. */
+export function unmatchedWithCandidates(): { action: StripperAction; result: CandidateResult }[] {
+  const { stripper, stripperSim, graph } = store.get();
+  if (!stripperSim || !graph) return [];
+  return stripper.actions
+    .filter((a) => a.kind !== 'add' && (stripperSim.perAction.get(a.uid)?.matched ?? 1) === 0)
+    .map((action) => ({ action, result: findCandidates(action, graph) }));
+}
+
+/** Rewrites every unmatched action that has a sure candidate; returns how many. */
+export function applySureCandidates(): number {
+  const sure = new Map<string, Candidate>();
+  for (const { action, result } of unmatchedWithCandidates()) if (result.sure) sure.set(action.uid, result.sure);
+  if (sure.size === 0) return 0;
+  setStripper((c) => ({ actions: c.actions.map((a) => (a.kind !== 'add' && sure.has(a.uid) ? applyCandidate(a, sure.get(a.uid)!, mapName()) : a)) }));
+  return sure.size;
+}
+
 // ---------------------------------------------------------------------------------------------
 // From entities
 // ---------------------------------------------------------------------------------------------
@@ -192,13 +217,18 @@ export function startOutputInsert(e: MapEntity): void {
 // Import
 // ---------------------------------------------------------------------------------------------
 
-export function importStripperText(text: string, target: string, mode: 'replace' | 'append'): { count: number; warnings: string[] } {
-  const { actions, warnings } = parseStripperFile(text, target);
+/** Reads a StripperCS2 jsonc, or converts a CS:GO Stripper:Source .cfg (detected from the text). */
+export function importStripperText(text: string, target: string, mode: 'replace' | 'append'): { count: number; warnings: string[]; legacy: boolean } {
+  const legacy = isLegacyStripperText(text);
+  // a map compiled with prefab-decorated names ("[PR#]name") needs name matches that accept them
+  const prefabNames = store.get().map?.entities.some((e) => e.targetname.toUpperCase().startsWith(PREFAB_NAME_PREFIX)) ?? false;
+  const { actions, warnings } = legacy ? convertLegacyStripper(text, target, { prefabNames }) : parseStripperFile(text, target);
+  if (legacy && prefabNames) warnings.unshift('names are matched with or without the "[PR#]" prefix / "&0000" suffix the loaded map uses');
   setStripper((c) => ({
     actions: mode === 'replace' ? [...c.actions.filter((a) => a.target !== target), ...actions] : [...c.actions, ...actions],
   }));
   store.set({ selectedActionUid: actions[0]?.uid ?? store.get().selectedActionUid, stripperFile: actions.length > 0 ? target : store.get().stripperFile });
-  return { count: actions.length, warnings };
+  return { count: actions.length, warnings, legacy };
 }
 
 /** One line saying what an action selects and, for a modify, what it does to it. */
