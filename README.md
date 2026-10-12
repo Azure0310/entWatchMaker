@@ -237,6 +237,14 @@ hammerid は同じ vmap を再コンパイルする限り変わりませんが�
   - `hammerid` → `hammeruniqueid`、`.mdl` → `.vmdl`、`.vmt` → `.vmat` に置き換えます。移植したマップでは ID やパスが変わっていることが多いので、
     変換内容はアクションのコメントと読み込み時の警告に残ります。マップを読み込んだ状態なら一致件数で確認してください。
   - ブラシモデル（`"model" "*12"`）や、Output を追加する `AddOutput`（`OnX target:input::0:-1`、CS2 では CS2Fixes が必要）も警告します。
+  - VMF 形式の `connections { }`、`{` の直後の余計な文字列、`filter:` 内の `match: { }` など、Stripper:Source が通していた書き方も読みます（警告付き）。
+  - 読み込んだマップの名前が `[PR#]name`（point_template の lump では `[PR#]name&0000`）のときは、照合（filter / match / delete）の名前を
+    修飾あり・なしの両方に一致する正規表現にします。add / insert / replace で書く名前はそのままです。
+- **移植したマップに合わせる補助**: 変換したい CS2 版の vpk を読み込んでから設定を読み込むと、一致なしの filter / modify に
+  「読み込んだマップの候補」が出ます。名前・ID・位置（256u 以内）が同じエンティティを、クラスの一致（`func_physbox_multiplayer` → `func_physbox`、
+  `env_message` → `env_hudhint` などの置き換えを含む）や Output の一致と合わせて並べ、「これに合わせる」で照合（一意なら名前、なければ ID）と
+  出力先 lump を書き換えます。元の照合はメモに残ります。名前か ID が一意で矛盾のないものは「確実」で、一覧上部の「確実な候補をまとめて適用」で一括で書き換えられます。
+  同名が複数ある・クラスが違う・指定位置から離れているものは候補に出すだけなので、確認してから選んでください。
 - 編集内容はマップ名ごとにブラウザへ保存されます（EntWatch の設定とは別）。
 
 プラグインの実装（`src/actions/actions.cpp` / `json_actions.cpp`）に合わせた挙動で、ツールはこれを再現して件数を出しています。
@@ -319,6 +327,7 @@ cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同
 | `src/model/stripperBuild.ts` | エンティティからの照合 / 削除 / 複製 / キー値・Output 編集の生成 |
 | `src/model/stripperValidate.ts` | Stripper 設定の検証 |
 | `src/model/stripperLegacy.ts` | CS:GO の Stripper:Source 設定（`.cfg`）→ StripperCS2 アクションへの変換 |
+| `src/model/stripperCandidates.ts` | 一致しないアクションに対する、読み込んだマップの候補（名前 / ID / 位置 / クラス置き換え）と照合の書き換え |
 | `src/model/zip.ts` | 複数ファイルをまとめる zip 書き出し |
 | `src/ui/` | React UI（日本語 / English） |
 | `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート）, `evaluate.ts`（GFL 設定との一致率） |
@@ -436,7 +445,10 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   `global_lump`), saved individually or as one zip rooted at `addons/StripperCS2/`. Existing StripperCS2 files can be imported
   (repeated `"add"` keys included), and so can CS:GO Stripper:Source configs (`<map>.cfg`, `global_filters.cfg`): the format is
   detected and converted (outputs split into `io` fields, `hammerid` → `hammeruniqueid`, `.mdl` / `.vmt` → `.vmdl` / `.vmat`,
-  with a warning and an action comment for every change worth checking). The tool mirrors the plugin's semantics: filter → add → modify per lump, string values only,
+  with a warning and an action comment for every change worth checking). With a CS2 map loaded, `[PR#]`-decorated names are matched either way, and every
+  filter / modify that selects nothing lists the entities it probably meant (same name, id or position within 256u, with known class
+  replacements such as `func_physbox_multiplayer` → `func_physbox`); one click rewrites the match and the target lump, and the sure
+  ones can be applied all at once. The tool mirrors the plugin's semantics: filter → add → modify per lump, string values only,
   `/regex/` values are case-insensitive and unanchored, `replace.io` only touches outputs selected by `match.io`. Caveats: counts
   use JavaScript regexes (PCRE2-only syntax can't be counted), coordinates may be written differently by the game, lump names
   come from the vpk paths (check with `entity_lump_list` on the server), and the output has not been loaded on a live server.

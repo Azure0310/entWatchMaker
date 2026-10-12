@@ -28,6 +28,7 @@ import {
   buildMatch,
   type MatchStrategy,
 } from '../model/stripperBuild';
+import { applyCandidate, findCandidates, type Candidate, type CandidateResult } from '../model/stripperCandidates';
 import { convertLegacyStripper, isLegacyStripperText } from '../model/stripperLegacy';
 import { showToast } from './actions';
 import { MODE_KEY, store, type AppMode } from './store';
@@ -119,6 +120,29 @@ export function clearStripper(): void {
 export function applyMatchStrategy(uid: string, entity: MapEntity, strategy: MatchStrategy): void {
   const match: KV[] = buildMatch(entity, strategy);
   updateAction(uid, (a) => (a.kind === 'add' ? a : { ...a, match }));
+}
+
+/** Points the action at a candidate of the loaded map (match, lump, the old match kept in the note). */
+export function applyCandidateTo(uid: string, c: Candidate): void {
+  updateAction(uid, (a) => (a.kind === 'add' ? a : applyCandidate(a, c, mapName())));
+}
+
+/** Filters / modifies that select nothing in the loaded map, with what they probably meant. */
+export function unmatchedWithCandidates(): { action: StripperAction; result: CandidateResult }[] {
+  const { stripper, stripperSim, graph } = store.get();
+  if (!stripperSim || !graph) return [];
+  return stripper.actions
+    .filter((a) => a.kind !== 'add' && (stripperSim.perAction.get(a.uid)?.matched ?? 1) === 0)
+    .map((action) => ({ action, result: findCandidates(action, graph) }));
+}
+
+/** Rewrites every unmatched action that has a sure candidate; returns how many. */
+export function applySureCandidates(): number {
+  const sure = new Map<string, Candidate>();
+  for (const { action, result } of unmatchedWithCandidates()) if (result.sure) sure.set(action.uid, result.sure);
+  if (sure.size === 0) return 0;
+  setStripper((c) => ({ actions: c.actions.map((a) => (a.kind !== 'add' && sure.has(a.uid) ? applyCandidate(a, sure.get(a.uid)!, mapName()) : a)) }));
+  return sure.size;
 }
 
 // ---------------------------------------------------------------------------------------------
