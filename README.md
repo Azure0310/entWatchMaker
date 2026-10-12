@@ -228,6 +228,15 @@ hammerid は同じ vmap を再コンパイルする限り変わりませんが�
   「すべて zip で保存」で `addons/StripperCS2/…` 付きの zip にまとめます（`csgo` フォルダに展開）。`global_map.jsonc`（メイン lump だけ）/
   `global_lump.jsonc`（全 lump）も出力先に選べます。
 - **既存の StripperCS2 の jsonc も読み込めます**（同じキーを繰り返した `"add"` や単一オブジェクト形式も可）。末尾カンマなど、プラグインが読めない書き方には警告が出ます。
+- **CS:GO の Stripper:Source 設定（`addons/stripper/maps/<マップ>.cfg`、`global_filters.cfg`）も読み込めます。** 「既存の jsonc を読み込む」/ 貼り付けに
+  そのまま渡すと形式を自動判別し、StripperCS2 の jsonc に変換します（`global_filters.cfg` は `global_map` へ）。
+  - `filter:` / `remove:` / `add:` / `modify:`（`match:` / `replace:` / `delete:` / `insert:`）をそれぞれのアクションに変換します。
+  - `"OnTrigger" "relay,Trigger,,0,-1"` のような Output（区切りが ESC 文字のものも可）は `io` の各フィールドに分解します。
+    値が正規表現の Output は、`,` で 5 つに分けられれば各フィールドの正規表現に、`/.*/` なら Output 名だけの指定にします。
+  - `modify` の `replace` にある Output は、同じ Output 名を `match.io` に足したうえで `replace.io` にします（1 つの modify で書き換えられる Output は 1 つ）。
+  - `hammerid` → `hammeruniqueid`、`.mdl` → `.vmdl`、`.vmt` → `.vmat` に置き換えます。移植したマップでは ID やパスが変わっていることが多いので、
+    変換内容はアクションのコメントと読み込み時の警告に残ります。マップを読み込んだ状態なら一致件数で確認してください。
+  - ブラシモデル（`"model" "*12"`）や、Output を追加する `AddOutput`（`OnX target:input::0:-1`、CS2 では CS2Fixes が必要）も警告します。
 - 編集内容はマップ名ごとにブラウザへ保存されます（EntWatch の設定とは別）。
 
 プラグインの実装（`src/actions/actions.cpp` / `json_actions.cpp`）に合わせた挙動で、ツールはこれを再現して件数を出しています。
@@ -309,6 +318,7 @@ cooldown の差が 1 秒以内か（CS2Fixes の猶予。2 秒以下は 0 と同
 | `src/model/stripperMatch.ts` | プラグインの照合と filter → add → modify の再現（一致件数・適用後の状態） |
 | `src/model/stripperBuild.ts` | エンティティからの照合 / 削除 / 複製 / キー値・Output 編集の生成 |
 | `src/model/stripperValidate.ts` | Stripper 設定の検証 |
+| `src/model/stripperLegacy.ts` | CS:GO の Stripper:Source 設定（`.cfg`）→ StripperCS2 アクションへの変換 |
 | `src/model/zip.ts` | 複数ファイルをまとめる zip 書き出し |
 | `src/ui/` | React UI（日本語 / English） |
 | `scripts/` | Node 用: `dump-entities.ts`（JSON 書き出し）, `diagnose.ts`（設定との突き合わせレポート）, `evaluate.ts`（GFL 設定との一致率） |
@@ -424,7 +434,9 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   loaded map, the entity list and tree badge removed / changed entities, and the "After" tab diffs the entity. Output is one
   jsonc per lump (`maps/<map>/default_ents.jsonc`, template lumps as `maps/<map>/9#entitylumpname.jsonc`, plus `global_map` /
   `global_lump`), saved individually or as one zip rooted at `addons/StripperCS2/`. Existing StripperCS2 files can be imported
-  (repeated `"add"` keys included). The tool mirrors the plugin's semantics: filter → add → modify per lump, string values only,
+  (repeated `"add"` keys included), and so can CS:GO Stripper:Source configs (`<map>.cfg`, `global_filters.cfg`): the format is
+  detected and converted (outputs split into `io` fields, `hammerid` → `hammeruniqueid`, `.mdl` / `.vmt` → `.vmdl` / `.vmat`,
+  with a warning and an action comment for every change worth checking). The tool mirrors the plugin's semantics: filter → add → modify per lump, string values only,
   `/regex/` values are case-insensitive and unanchored, `replace.io` only touches outputs selected by `match.io`. Caveats: counts
   use JavaScript regexes (PCRE2-only syntax can't be counted), coordinates may be written differently by the game, lump names
   come from the vpk paths (check with `entity_lump_list` on the server), and the output has not been loaded on a live server.

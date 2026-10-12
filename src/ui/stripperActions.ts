@@ -28,6 +28,7 @@ import {
   buildMatch,
   type MatchStrategy,
 } from '../model/stripperBuild';
+import { convertLegacyStripper, isLegacyStripperText } from '../model/stripperLegacy';
 import { showToast } from './actions';
 import { MODE_KEY, store, type AppMode } from './store';
 import { refreshStripperSim, setStripper } from './stripperState';
@@ -191,13 +192,15 @@ export function startOutputInsert(e: MapEntity): void {
 // Import
 // ---------------------------------------------------------------------------------------------
 
-export function importStripperText(text: string, target: string, mode: 'replace' | 'append'): { count: number; warnings: string[] } {
-  const { actions, warnings } = parseStripperFile(text, target);
+/** Reads a StripperCS2 jsonc, or converts a CS:GO Stripper:Source .cfg (detected from the text). */
+export function importStripperText(text: string, target: string, mode: 'replace' | 'append'): { count: number; warnings: string[]; legacy: boolean } {
+  const legacy = isLegacyStripperText(text);
+  const { actions, warnings } = legacy ? convertLegacyStripper(text, target) : parseStripperFile(text, target);
   setStripper((c) => ({
     actions: mode === 'replace' ? [...c.actions.filter((a) => a.target !== target), ...actions] : [...c.actions, ...actions],
   }));
   store.set({ selectedActionUid: actions[0]?.uid ?? store.get().selectedActionUid, stripperFile: actions.length > 0 ? target : store.get().stripperFile });
-  return { count: actions.length, warnings };
+  return { count: actions.length, warnings, legacy };
 }
 
 /** One line saying what an action selects and, for a modify, what it does to it. */

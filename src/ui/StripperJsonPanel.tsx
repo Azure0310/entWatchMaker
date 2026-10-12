@@ -61,7 +61,7 @@ export function StripperJsonPanel({ issues }: { issues: StripperIssue[] }) {
       setImportError(null);
       setImportOpen(false);
       setImportText('');
-      showToast(`${r.count} actions${r.warnings.length ? ` (${r.warnings.slice(0, 3).join('; ')})` : ''}`);
+      showToast(`${r.legacy ? `${t('stj.legacyConverted')}: ` : ''}${r.count} actions${r.warnings.length ? ` (${r.warnings.slice(0, 3).join('; ')})` : ''}`);
     } catch (err) {
       setImportError(err instanceof Error ? err.message : String(err));
     }
@@ -71,8 +71,9 @@ export function StripperJsonPanel({ issues }: { issues: StripperIssue[] }) {
     if (!file) return;
     setImportText(await file.text());
     // a file named like a lump (default_ents.jsonc) says where it belongs
-    const stem = file.name.replace(/\.jsonc?$/i, '');
-    if (stem === 'global_map') setImportTarget(GLOBAL_MAP);
+    const stem = file.name.replace(/\.(?:jsonc?|cfg)$/i, '');
+    if (/\.cfg$/i.test(file.name)) setImportTarget(stem === 'global_filters' ? GLOBAL_MAP : MAIN_LUMP);
+    else if (stem === 'global_map') setImportTarget(GLOBAL_MAP);
     else if (stem === 'global_lump' || stem === 'global') setImportTarget(GLOBAL_LUMP);
     else if (importTargets.includes(stem)) setImportTarget(stem);
     setImportOpen(true);
@@ -103,7 +104,7 @@ export function StripperJsonPanel({ issues }: { issues: StripperIssue[] }) {
         )}
         <label className="btn">
           {t('json.import')}
-          <input type="file" accept=".jsonc,.json,.txt" style={{ display: 'none' }} onChange={(e) => void onImportFile(e.target.files?.[0])} data-testid="import-stripper-file" />
+          <input type="file" accept=".jsonc,.json,.cfg,.txt" title={t('stj.legacyHint')} style={{ display: 'none' }} onChange={(e) => void onImportFile(e.target.files?.[0])} data-testid="import-stripper-file" />
         </label>
         <button type="button" className="btn" onClick={() => setImportOpen(!importOpen)} data-testid="import-stripper-paste">
           {t('json.importPaste')}
@@ -121,6 +122,7 @@ export function StripperJsonPanel({ issues }: { issues: StripperIssue[] }) {
               ))}
             </select>
           </label>
+          <div className="muted small">{t('stj.legacyHint')}</div>
           <textarea className="textarea" rows={8} value={importText} onChange={(e) => setImportText(e.target.value)} placeholder={t('json.importPlaceholder')} data-testid="import-stripper-text" />
           {importError && <div className="warn small">{importError}</div>}
           <div className="btn-row">
