@@ -227,6 +227,13 @@ hammerid は同じ vmap を再コンパイルする限り変わりませんが�
   `maps/<マップ>/9#entitylumpname.jsonc` のように lump 名のファイルになります。エンティティの lump から自動で振り分け、複数ファイルのときは
   「すべて zip で保存」で `addons/StripperCS2/…` 付きの zip にまとめます（`csgo` フォルダに展開）。`global_map.jsonc`（メイン lump だけ）/
   `global_lump.jsonc`（全 lump）も出力先に選べます。
+- **中国語のテキストを見つけて翻訳できます。** 中央の「中国語テキスト」タブに、プロパティ値（`game_text` / `point_worldtext` の `message` など）と
+  Output のパラメータ（`point_servercommand` への `say ***…***` など）のうち中国語を含むものが、同じ文ごとにまとめて並びます
+  （`targetname` などの名前は参照が壊れるので対象外。言語の切り替えで日本語 / 韓国語 / CJK すべても表示できます）。
+  訳文を入れると、その文が出てくるすべての場所に `modify` を作ります — プロパティは `replace`、Output は `match.io` で
+  その出力だけを選んで `replace.io` の `overrideparam` を書き換えます。訳文を空にすると元に戻ります。
+  「翻訳表をダウンロード」で `{"原文": ""}` 形式の JSON を書き出し、翻訳ツールなどで訳を埋めて「翻訳表を読み込む」と一括で適用できます
+  （「原文<TAB>訳文」の行も読めます）。かなを含まない漢字だけの日本語も中国語として出ます。
 - **既存の StripperCS2 の jsonc も読み込めます**（同じキーを繰り返した `"add"` や単一オブジェクト形式も可）。末尾カンマなど、プラグインが読めない書き方には警告が出ます。
 - 編集内容はマップ名ごとにブラウザへ保存されます（EntWatch の設定とは別）。
 
@@ -428,5 +435,10 @@ EntWatch built into [CS2Fixes](https://github.com/Source2ZE/CS2Fixes)
   `/regex/` values are case-insensitive and unanchored, `replace.io` only touches outputs selected by `match.io`. Caveats: counts
   use JavaScript regexes (PCRE2-only syntax can't be counted), coordinates may be written differently by the game, lump names
   come from the vpk paths (check with `entity_lump_list` on the server), and the output has not been loaded on a live server.
+- **Translating Chinese maps**: in Stripper mode the "Chinese text" tab lists every key value (`game_text` / `point_worldtext`
+  `message`, …) and output parameter (`say ***…***` commands, …) containing Chinese, grouped by identical text (names such as
+  `targetname` are skipped; Japanese / Korean / all CJK can be listed too). A translation becomes `modify` actions for every place
+  the text appears (`replace` for key values, `match.io` + `replace.io` `overrideparam` for outputs); clearing it reverts them. The
+  whole table can be downloaded as JSON `{"original": ""}`, translated elsewhere and loaded back (tab separated lines work too).
 - Dev: `npm install --legacy-peer-deps`, `npm run dev`, `npm test`, `npm run build`, `npm run build:single`. Deploy with the included
   GitHub Pages workflow (Settings → Pages → Source: GitHub Actions).
